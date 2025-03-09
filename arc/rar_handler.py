@@ -181,60 +181,99 @@ class RarHandler(ArchiveHandler):
             with rarfile.RarFile(path) as rf:
                 print(f"RarHandler: RARアーカイブパス: {path}, 内部パス: {internal_path}")
                 
-                # RARファイルの内部パスを構築（必要な場合）
-                full_internal_path = f"{path}/{internal_path}" if internal_path else path
+                # エントリ一覧を取得する共通関数を呼び出す
+                result = self._get_entries_from_rarfile(rf, internal_path)
                 
-                # 内部パスがファイルの場合は単一エントリを返す
-                if internal_path and not internal_path.endswith('/'):
-                    try:
-                        file_info = rf.getinfo(internal_path)
-                        # ファイルエントリを作成
-                        entry = EntryInfo(
-                            name=os.path.basename(internal_path),
-                            path=internal_path,  # 相対パスを使用
-                            size=file_info.file_size,
-                            modified_time=datetime.datetime(*file_info.date_time),
-                            type=EntryType.FILE if not file_info.is_dir() else EntryType.DIRECTORY
-                        )
-                        result.append(entry)
-                    except Exception as e:
-                        if self.debug:
-                            print(f"RarHandler: 内部パスの情報取得エラー: {e}")
-                    return result
-                
-                # 全エントリを走査
-                for item in rf.infolist():
-                    item_path = item.filename
-                    
-                    # 内部パスが指定されている場合はフィルタリング
-                    if internal_path:
-                        if not item_path.startswith(internal_path):
-                            continue
-                            
-                        # 内部パスより深い階層のアイテムは除外
-                        rel_path = item_path[len(internal_path):]
-                        if rel_path.startswith('/'):
-                            rel_path = rel_path[1:]
-                        if '/' in rel_path:
-                            continue
-                    
-                    # エントリ情報を作成
-                    entry = EntryInfo(
-                        name=os.path.basename(item_path),
-                        path=item_path,  # 相対パスを使用
-                        size=item.file_size,
-                        modified_time=datetime.datetime(*item.date_time),
-                        type=EntryType.FILE if not item.is_dir() else EntryType.DIRECTORY
-                    )
-                    result.append(entry)
-                    
                 print(f"RarHandler: {len(result)} エントリを返します")
                 return result
         except Exception as e:
             if self.debug:
                 print(f"RarHandler: エントリ一覧取得エラー: {e}")
             return []
-    
+
+    def _get_entries_from_rarfile(self, rf: 'rarfile.RarFile', internal_path: str = "") -> List[EntryInfo]:
+        """
+        rarfileオブジェクトからエントリ一覧を取得する共通関数
+        
+        Args:
+            rf: rarfileオブジェクト
+            internal_path: アーカイブ内の相対パス（指定した場合はそのディレクトリ内のエントリのみ取得）
+            
+        Returns:
+            エントリ情報のリスト
+        """
+        result = []
+        
+        # 内部パスがファイルの場合は単一エントリを返す
+        if internal_path and not internal_path.endswith('/'):
+            try:
+                file_info = rf.getinfo(internal_path)
+                # ファイルエントリを作成
+                entry = EntryInfo(
+                    name=os.path.basename(internal_path),
+                    path=internal_path,  # 相対パスを使用
+                    size=file_info.file_size,
+                    modified_time=datetime.datetime(*file_info.date_time),
+                    type=EntryType.FILE if not file_info.is_dir() else EntryType.DIRECTORY
+                )
+                result.append(entry)
+                return result
+            except Exception as e:
+                if self.debug:
+                    print(f"RarHandler: 内部パスの情報取得エラー: {e}")
+                    
+        # 一意なディレクトリパスを追跡するセット
+        unique_dirs = set()
+        
+        # 全エントリを走査
+        for item in rf.infolist():
+            item_path = item.filename
+            
+            # MacOSXのメタデータは無視
+            if '__MACOSX/' in item_path or '.DS_Store' in item_path:
+                continue
+            
+            # 内部パスが指定されている場合はフィルタリング
+            if internal_path:
+                if not item_path.startswith(internal_path):
+                    continue
+                    
+                # 内部パスより深い階層のアイテムは除外されないように修正
+                rel_path = item_path[len(internal_path):]
+                if rel_path.startswith('/'):
+                    rel_path = rel_path[1:]
+                    
+                # ディレクトリ直下のファイル/ディレクトリのみを追加
+                parts = rel_path.split('/')
+                if len(parts) > 1:
+                    # サブディレクトリの場合、最初の部分だけをディレクトリとして追加
+                    dir_name = parts[0]
+                    if dir_name and dir_name not in unique_dirs:
+                        unique_dirs.add(dir_name)
+                        dir_path = os.path.join(internal_path, dir_name).replace('\\', '/')
+                        
+                        # ディレクトリエントリを作成
+                        result.append(EntryInfo(
+                            name=dir_name,
+                            path=dir_path,
+                            size=0,
+                            modified_time=None,
+                            type=EntryType.DIRECTORY
+                        ))
+                    continue
+            
+            # エントリ情報を作成
+            entry = EntryInfo(
+                name=os.path.basename(item_path),
+                path=item_path,  # 相対パスを使用
+                size=item.file_size,
+                modified_time=datetime.datetime(*item.date_time),
+                type=EntryType.FILE if not item.is_dir() else EntryType.DIRECTORY
+            )
+            result.append(entry)
+        
+        return result
+
     def list_entries_from_bytes(self, data: bytes, internal_path: str = "") -> List[EntryInfo]:
         """
         バイトデータからRARアーカイブ内のエントリ一覧を取得する
@@ -265,31 +304,8 @@ class RarHandler(ArchiveHandler):
             try:
                 # 一時ファイルからRARを開く
                 with rarfile.RarFile(tmp_path) as rf:
-                    # 全エントリを走査
-                    for item in rf.infolist():
-                        item_path = item.filename
-                        
-                        # 内部パスが指定されている場合はフィルタリング
-                        if internal_path:
-                            if not item_path.startswith(internal_path):
-                                continue
-                                
-                            # 内部パスより深い階層のアイテムは除外
-                            rel_path = item_path[len(internal_path):]
-                            if rel_path.startswith('/'):
-                                rel_path = rel_path[1:]
-                            if '/' in rel_path:
-                                continue
-                        
-                        # エントリ情報を作成
-                        entry = EntryInfo(
-                            name=os.path.basename(item_path),
-                            path=item_path,  # 相対パスを使用
-                            size=item.file_size,
-                            modified_time=datetime.datetime(*item.date_time),
-                            type=EntryType.FILE if not item.is_dir() else EntryType.DIRECTORY
-                        )
-                        result.append(entry)
+                    # 共通関数を使用してエントリを取得
+                    result = self._get_entries_from_rarfile(rf, internal_path)
             finally:
                 # 一時ファイルを削除
                 try:
@@ -303,7 +319,7 @@ class RarHandler(ArchiveHandler):
             if self.debug:
                 print(f"RarHandler: バイトデータからのエントリ一覧取得エラー: {e}")
             return []
-    
+
     def get_entry_info(self, path: str) -> Optional[EntryInfo]:
         """
         指定されたパスのエントリ情報を取得する
@@ -587,383 +603,6 @@ class RarHandler(ArchiveHandler):
         # RARファイルが見つからなかった
         return "", ""
     
-    def list_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
-        """
-        メモリ上のアーカイブデータからエントリのリストを返す
-        
-        Args:
-            archive_data: アーカイブデータのバイト配列
-            path: アーカイブ内のパス（デフォルトはルート）
-            
-        Returns:
-            エントリ情報のリスト
-        """
-        if not RARFILE_AVAILABLE or not self._available:
-            return []
-            
-        print(f"RarHandler: メモリ上のRARデータ ({len(archive_data)} バイト) からエントリリスト取得")
-        
-        try:
-            # メモリからRARファイルを直接開く（BytesIOを使用）
-            import io
-            rf = rarfile.RarFile(io.BytesIO(archive_data))
-            
-            # 内部パスを正規化
-            norm_internal_path = path.rstrip('/')
-            prefix = norm_internal_path + '/' if norm_internal_path else ''
-            prefix_len = len(prefix)
-            
-            # このディレクトリ直下のエントリを取得
-            entries = []
-            dirs = set()
-            
-            # RARのエントリを全て取得
-            for info in rf.infolist():
-                # MacOSXのメタデータは無視
-                if '__MACOSX/' in info.filename or '.DS_Store' in info.filename:
-                    continue
-                
-                # 正規化されたパス
-                filename = info.filename.replace('\\', '/')
-                
-                # 指定されたディレクトリの中にあるかチェック
-                if prefix and not filename.startswith(prefix):
-                    continue
-                
-                # プレフィックスを取り除いたパス
-                rel_name = filename[prefix_len:] if prefix_len > 0 else filename
-                
-                # スラッシュがあるかどうかで直下のエントリか判定
-                slash_index = rel_name.find('/')
-                if slash_index != -1:
-                    # サブディレクトリのエントリ - 直下のディレクトリ名だけ抽出
-                    dir_name = rel_name[:slash_index]
-                    if dir_name and dir_name not in dirs:  # ディレクトリは一度だけ追加
-                        dirs.add(dir_name)
-                        
-                        # ディレクトリエントリを作成
-                        dir_path = os.path.join(path, dir_name).replace('\\', '/')
-                        entries.append(EntryInfo(
-                            name=dir_name,
-                            path=dir_path,
-                            size=0,
-                            modified_time=None,
-                            type=EntryType.DIRECTORY
-                        ))
-                else:
-                    # 直下のファイル
-                    if rel_name:
-                        file_type = EntryType.FILE
-                        # アーカイブかどうかを判定
-                        _, ext = os.path.splitext(rel_name.lower())
-                        if ext in ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2']:
-                            file_type = EntryType.ARCHIVE
-                            
-                        # ファイルエントリを作成
-                        file_path = os.path.join(path, rel_name).replace('\\', '/')
-                        entries.append(EntryInfo(
-                            name=rel_name,
-                            path=file_path,
-                            size=info.file_size,
-                            modified_time=datetime.datetime(*info.date_time),
-                            type=file_type
-                        ))
-            
-            print(f"RarHandler: {len(entries)} エントリを返します")
-            return entries
-            
-        except rarfile.Error as e:
-            print(f"RarHandler: メモリデータからのエントリ取得エラー (rarfile): {e}")
-            # 一時ファイルを使用するフォールバック
-            return self._fallback_list_entries_from_bytes(archive_data, path)
-        except Exception as e:
-            print(f"RarHandler: メモリデータからのエントリ取得エラー (一般): {e}")
-            import traceback
-            traceback.print_exc()
-            return []
-
-    def list_all_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
-        """
-        メモリ上のRARデータからすべてのエントリを再帰的に取得する（フィルタリングなし）
-        
-        Args:
-            archive_data: RARデータのバイト配列
-            path: ベースパス（結果のEntryInfoに反映される）
-            
-        Returns:
-            アーカイブ内のすべてのエントリのリスト。サポートしていない場合は空リスト
-        """
-        try:
-            if not self.can_handle_bytes(archive_data):
-                print(f"RarHandler: このバイトデータは処理できません")
-                return []
-                
-            print(f"RarHandler: メモリデータからすべてのエントリを取得中 ({len(archive_data)} バイト)")
-            
-            # 一時ファイルに保存
-            temp_file = self.save_to_temp_file(archive_data, '.rar')
-            if not temp_file:
-                print(f"RarHandler: 一時ファイル作成に失敗しました")
-                return []
-            
-            try:
-                # 一時ファイルを使用してRARを開く
-                with rarfile.RarFile(temp_file) as rf:
-                    # すべてのエントリを格納するリスト
-                    all_entries = []
-                    
-                    # 全てのRARエントリを処理
-                    for info in rf.infolist():
-                        # ファイル名を取得
-                        name = info.filename
-                        
-                        # Macの隠しフォルダなどをスキップ
-                        if '__MACOSX' in name:
-                            continue
-                            
-                        # ディレクトリか判定
-                        is_dir = info.isdir()
-                        
-                        # ファイル情報からエントリ情報を作成
-                        if is_dir:
-                            # ディレクトリの場合
-                            dir_name = os.path.basename(name.rstrip('/'))
-                            entry_path = f"{path}/{name}" if path else name
-                            
-                            all_entries.append(EntryInfo(
-                                name=dir_name,
-                                path=entry_path,
-                                size=0,
-                                modified_time=None,
-                                type=EntryType.DIRECTORY
-                            ))
-                        else:
-                            # ファイルの場合
-                            file_name = os.path.basename(name)
-                            file_path = f"{path}/{name}" if path else name
-                            
-                            # 日付情報の取得
-                            timestamp = datetime.datetime.fromtimestamp(info.date_time) if info.date_time else None
-                            
-                            # ファイルの拡張子をチェックしてアーカイブなら特別に処理
-                            _, ext = os.path.splitext(file_name.lower())
-                            entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
-                                
-                            all_entries.append(EntryInfo(
-                                name=file_name,
-                                path=file_path,
-                                size=info.file_size,
-                                modified_time=timestamp,
-                                type=entry_type
-                            ))
-                    
-                    print(f"RarHandler: メモリデータから全 {len(all_entries)} エントリを取得しました")
-                    return all_entries
-            finally:
-                # 一時ファイルを削除
-                self.cleanup_temp_file(temp_file)
-        
-        except Exception as e:
-            print(f"RarHandler: メモリからの全エントリ取得エラー: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
-    
-    def _fallback_list_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
-        """
-        一時ファイルを使用するフォールバックのエントリリスト取得
-        
-        Args:
-            archive_data: アーカイブデータのバイト配列
-            path: アーカイブ内のパス（デフォルトはルート）
-            
-        Returns:
-            エントリ情報のリスト
-        """
-        # 一時ファイルに保存
-        temp_file = None
-        try:
-            temp_file = self.save_to_temp_file(archive_data, ".rar")
-            if not temp_file:
-                print("RarHandler: 一時ファイル作成失敗")
-                return []
-                
-            # RARファイルを開く
-            try:
-                rf = rarfile.RarFile(temp_file)
-            except Exception as e:
-                print(f"RarHandler: RARファイルをオープンできません: {e}")
-                return []
-            
-            # 内部パスを正規化
-            norm_internal_path = path.rstrip('/')
-            prefix = norm_internal_path + '/' if norm_internal_path else ''
-            prefix_len = len(prefix)
-            
-            # このディレクトリ直下のエントリを取得
-            entries = []
-            dirs = set()
-            
-            # RARのエントリを全て取得
-            for info in rf.infolist():
-                # MacOSXのメタデータは無視
-                if '__MACOSX/' in info.filename or '.DS_Store' in info.filename:
-                    continue
-                
-                # 正規化されたパス
-                filename = info.filename.replace('\\', '/')
-                
-                # 指定されたディレクトリの中にあるかチェック
-                if prefix and not filename.startswith(prefix):
-                    continue
-                
-                # プレフィックスを取り除いたパス
-                rel_name = filename[prefix_len:] if prefix_len > 0 else filename
-                
-                # スラッシュがあるかどうかで直下のエントリか判定
-                slash_index = rel_name.find('/')
-                if slash_index != -1:
-                    # サブディレクトリのエントリ - 直下のディレクトリ名だけ抽出
-                    dir_name = rel_name[:slash_index]
-                    if dir_name and dir_name not in dirs:  # ディレクトリは一度だけ追加
-                        dirs.add(dir_name)
-                        
-                        # ディレクトリエントリを作成
-                        dir_path = os.path.join(path, dir_name).replace('\\', '/')
-                        entries.append(EntryInfo(
-                            name=dir_name,
-                            path=dir_path,
-                            size=0,
-                            modified_time=None,
-                            type=EntryType.DIRECTORY
-                        ))
-                else:
-                    # 直下のファイル
-                    if rel_name:
-                        file_type = EntryType.FILE
-                        # アーカイブかどうかを判定
-                        _, ext = os.path.splitext(rel_name.lower())
-                        if ext in ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2']:
-                            file_type = EntryType.ARCHIVE
-                            
-                        # ファイルエントリを作成
-                        file_path = os.path.join(path, rel_name).replace('\\', '/')
-                        entries.append(EntryInfo(
-                            name=rel_name,
-                            path=file_path,
-                            size=info.file_size,
-                            modified_time=datetime.datetime(*info.date_time),
-                            type=file_type
-                        ))
-            
-            print(f"RarHandler: {len(entries)} エントリを返します (フォールバック)")
-            return entries
-        finally:
-            # 一時ファイルを削除
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except:
-                    pass
-
-    def read_file_from_bytes(self, archive_data: bytes, file_path: str) -> Optional[bytes]:
-        """
-        メモリ上のアーカイブデータから特定のファイルを読み込む
-        
-        Args:
-            archive_data: アーカイブデータのバイト配列
-            file_path: アーカイブ内のファイルパス
-            
-        Returns:
-            ファイルの内容。読み込みに失敗した場合はNone
-        """
-        if not RARFILE_AVAILABLE or not self._available:
-            return None
-            
-        print(f"RarHandler: メモリ上のRARデータから '{file_path}' を読み込み中")
-        
-        try:
-            # メモリからRARファイルを直接開く
-            import io
-            rf = rarfile.RarFile(io.BytesIO(archive_data))
-            
-            # 正規化されたパス
-            normal_path = file_path.replace('\\', '/')
-            
-            # ファイルを読み込む
-            try:
-                with rf.open(normal_path) as f:
-                    content = f.read()
-                    
-                print(f"RarHandler: ファイル読み込み成功: {len(content)} バイト")
-                return content
-            except KeyError:
-                print(f"RarHandler: ファイルが見つかりません: {normal_path}")
-                return None
-            except Exception as e:
-                print(f"RarHandler: ファイル読み込みエラー: {e}")
-                return None
-                
-        except rarfile.Error as e:
-            print(f"RarHandler: メモリデータからの読み込みエラー (rarfile): {e}")
-            # 一時ファイルを使用するフォールバック
-            return self._fallback_read_file_from_bytes(archive_data, file_path)
-        except Exception as e:
-            print(f"RarHandler: メモリデータからの読み込みエラー (一般): {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-    
-    def _fallback_read_file_from_bytes(self, archive_data: bytes, file_path: str) -> Optional[bytes]:
-        """
-        一時ファイルを使用するフォールバックのファイル読み込み
-        
-        Args:
-            archive_data: アーカイブデータのバイト配列
-            file_path: アーカイブ内のファイルパス
-            
-        Returns:
-            ファイルの内容。読み込みに失敗した場合はNone
-        """
-        # 一時ファイルに保存
-        temp_file = None
-        try:
-            temp_file = self.save_to_temp_file(archive_data, ".rar")
-            if not temp_file:
-                print("RarHandler: 一時ファイル作成失敗")
-                return None
-                
-            # RARファイルを開く
-            try:
-                rf = rarfile.RarFile(temp_file)
-            except Exception as e:
-                print(f"RarHandler: RARファイルをオープンできません: {e}")
-                return None
-                
-            # 正規化されたパス
-            normal_path = file_path.replace('\\', '/')
-            
-            # ファイルを読み込む
-            try:
-                with rf.open(normal_path) as f:
-                    content = f.read()
-                    
-                print(f"RarHandler: ファイル読み込み成功: {len(content)} バイト (フォールバック)")
-                return content
-            except KeyError:
-                print(f"RarHandler: ファイルが見つかりません: {normal_path}")
-                return None
-            except Exception as e:
-                print(f"RarHandler: ファイル読み込みエラー: {e}")
-                return None
-        finally:
-            # 一時ファイルを削除
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except:
-                    pass
-
     def list_all_entries(self, path: str) -> List[EntryInfo]:
         """
         指定したRARアーカイブ内のすべてのエントリを再帰的に取得する（フィルタリングなし）
@@ -986,59 +625,229 @@ class RarHandler(ArchiveHandler):
             print(f"RarHandler: list_all_entriesでは内部パスを指定できません。アーカイブ全体が対象です: {path}")
             # 内部パスを無視してアーカイブファイル全体を処理
         
-        # すべてのエントリを格納するリスト
-        all_entries = []
-        
         try:
             # RARファイルを開く
             with rarfile.RarFile(archive_path) as rf:
-                # すべてのエントリを処理
-                for info in rf.infolist():
-                    # MacOSXのメタデータなどをスキップ
-                    if '__MACOSX/' in info.filename or '.DS_Store' in info.filename:
-                        continue
-                    
-                    # ディレクトリかどうかの判定
-                    is_dir = info.isdir()
-                    
-                    # ファイル情報からエントリ情報を作成
-                    if is_dir:
-                        # ディレクトリの場合
-                        dir_name = os.path.basename(info.filename.rstrip('/'))
-                        entry_path = f"{archive_path}/{info.filename}"
-                        
-                        all_entries.append(EntryInfo(
-                            name=dir_name,
-                            path=entry_path,
-                            size=0,
-                            modified_time=None,
-                            type=EntryType.DIRECTORY
-                        ))
-                    else:
-                        # ファイルの場合
-                        file_name = os.path.basename(info.filename)
-                        file_path = f"{archive_path}/{info.filename}"
-                        
-                        # 日付情報の取得
-                        timestamp = datetime.datetime.fromtimestamp(info.date_time) if info.date_time else None
-                        
-                        # ファイルの拡張子をチェックしてアーカイブなら特別に処理
-                        _, ext = os.path.splitext(file_name.lower())
-                        entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
-                            
-                        all_entries.append(EntryInfo(
-                            name=file_name,
-                            path=file_path,
-                            size=info.file_size,
-                            modified_time=timestamp,
-                            type=entry_type
-                        ))
-                
+                # 共通関数を使用してすべてのエントリを取得
+                all_entries = self._get_all_entries_from_rarfile(rf)
                 print(f"RarHandler: {archive_path} 内の全エントリ数: {len(all_entries)}")
                 return all_entries
-                
         except Exception as e:
             print(f"RarHandler: 全エントリ取得中にエラーが発生しました: {e}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            return []
+
+    def _get_all_entries_from_rarfile(self, rf: 'rarfile.RarFile') -> List[EntryInfo]:
+        """
+        rarfileオブジェクトからすべてのエントリを取得する共通関数
+        
+        Args:
+            rf: rarfileオブジェクト
+            
+        Returns:
+            すべてのエントリ情報のリスト
+        """
+        all_entries = []
+        
+        # 全エントリを走査
+        for info in rf.infolist():
+            # MacOSXのメタデータなどをスキップ
+            if '__MACOSX/' in info.filename or '.DS_Store' in info.filename:
+                continue
+            
+            item_path = info.filename
+            
+            # ディレクトリかどうかの判定
+            is_dir = info.isdir()
+            
+            # ファイル情報からエントリ情報を作成
+            if is_dir:
+                # ディレクトリの場合
+                dir_name = os.path.basename(item_path.rstrip('/'))
+                
+                all_entries.append(EntryInfo(
+                    name=dir_name,
+                    path=item_path,  # 相対パスを使用
+                    size=0,
+                    modified_time=None,
+                    type=EntryType.DIRECTORY
+                ))
+            else:
+                # ファイルの場合
+                file_name = os.path.basename(item_path)
+                
+                # 日付情報の取得
+                try:
+                    mod_time = datetime.datetime(*info.date_time)
+                except:
+                    mod_time = None
+                
+                # ファイルの拡張子をチェックしてアーカイブなら特別に処理
+                _, ext = os.path.splitext(file_name.lower())
+                entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
+                    
+                all_entries.append(EntryInfo(
+                    name=file_name,
+                    path=item_path,  # 相対パスを使用
+                    size=info.file_size,
+                    modified_time=mod_time,
+                    type=entry_type
+                ))
+        
+        return all_entries
+
+    def list_all_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
+        """
+        メモリ上のRARデータからすべてのエントリを再帰的に取得する（フィルタリングなし）
+        
+        Args:
+            archive_data: RARデータのバイト配列
+            path: ベースパス（結果のEntryInfoに反映される）
+            
+        Returns:
+            アーカイブ内のすべてのエントリのリスト。サポートしていない場合は空リスト
+        """
+        try:
+            if not self.can_handle_bytes(archive_data):
+                print(f"RarHandler: このバイトデータは処理できません")
+                return []
+                    
+            print(f"RarHandler: メモリデータからすべてのエントリを取得中 ({len(archive_data)} バイト)")
+            
+            # 一時ファイルに保存
+            temp_file = self.save_to_temp_file(archive_data, '.rar')
+            if not temp_file:
+                print(f"RarHandler: 一時ファイル作成に失敗しました")
+                return []
+            
+            try:
+                # 一時ファイルを使用してRARを開く
+                with rarfile.RarFile(temp_file) as rf:
+                    # 共通関数を使用してすべてのエントリを取得
+                    all_entries = self._get_all_entries_from_rarfile(rf)
+                    print(f"RarHandler: メモリデータから全 {len(all_entries)} エントリを取得しました")
+                    return all_entries
+            finally:
+                # 一時ファイルを削除
+                self.cleanup_temp_file(temp_file)
+        
+        except Exception as e:
+            print(f"RarHandler: メモリからの全エントリ取得エラー: {e}")
             import traceback
             traceback.print_exc()
             return []
+
+    def read_file_from_bytes(self, archive_data: bytes, file_path: str) -> Optional[bytes]:
+        """
+        メモリ上のアーカイブデータから特定のファイルを読み込む
+        
+        Args:
+            archive_data: アーカイブデータのバイト配列
+            file_path: アーカイブ内のファイルパス
+            
+        Returns:
+            ファイルの内容。読み込みに失敗した場合はNone
+        """
+        if not RARFILE_AVAILABLE or not self._available:
+            return None
+            
+        print(f"RarHandler: メモリ上のRARデータから '{file_path}' を読み込み中")
+        
+        # 一時ファイルを使用して確実に処理
+        temp_file = None
+        try:
+            # 一時ファイルに保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.rar') as tmp:
+                temp_file = tmp.name
+                tmp.write(archive_data)
+                
+            # RARファイルを開く
+            try:
+                rf = rarfile.RarFile(temp_file)
+                
+                # 正規化されたパス（相対パス）
+                normal_path = file_path.replace('\\', '/')
+                
+                # ファイルを読み込む
+                try:
+                    with rf.open(normal_path) as f:
+                        content = f.read()
+                        
+                    print(f"RarHandler: ファイル読み込み成功: {len(content)} バイト")
+                    return content
+                except KeyError:
+                    print(f"RarHandler: ファイルが見つかりません: {normal_path}")
+                    return None
+                except Exception as e:
+                    print(f"RarHandler: ファイル読み込みエラー: {e}")
+                    return None
+            except Exception as e:
+                print(f"RarHandler: RARファイルをオープンできません: {e}")
+                return None
+        except Exception as e:
+            print(f"RarHandler: メモリデータからの読み込みエラー: {e}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            return None
+        finally:
+            # 一時ファイルを削除
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+
+    def save_to_temp_file(self, data: bytes, suffix: str = '.tmp') -> Optional[str]:
+        """
+        バイトデータを一時ファイルに保存する
+        
+        Args:
+            data: 保存するバイトデータ
+            suffix: 一時ファイルの拡張子
+            
+        Returns:
+            一時ファイルのパス。失敗した場合はNone
+        """
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_path = tmp.name
+                tmp.write(data)
+                return tmp_path
+        except Exception as e:
+            print(f"一時ファイルの作成に失敗しました: {e}")
+            return None
+
+    def cleanup_temp_file(self, filepath: str) -> None:
+        """
+        一時ファイルを削除する
+        
+        Args:
+            filepath: 削除する一時ファイルのパス
+        """
+        if filepath and os.path.exists(filepath):
+            try:
+                os.unlink(filepath)
+            except Exception as e:
+                if self.debug:
+                    print(f"一時ファイルの削除に失敗しました: {e}")
+
+    def _join_paths(self, base_path: str, rel_path: str) -> str:
+        """
+        ベースパスと相対パスを結合する
+        
+        Args:
+            base_path: ベースパス
+            rel_path: 相対パス
+            
+        Returns:
+            結合されたパス
+        """
+        if rel_path:
+            # スラッシュを統一
+            base = base_path.rstrip('/')
+            rel = rel_path.lstrip('/')
+            return f"{base}/{rel}"
+        return base_path
