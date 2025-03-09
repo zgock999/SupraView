@@ -661,15 +661,20 @@ def test_archive_file(internal_path: str):
         file_content = None
         success_path = None
         
+        import time
+        # ファイルからの読み込み速度計測
+        file_read_start = time.time()
         try:
             file_content = handler.read_archive_file(current_archive_path, internal_path)
+            file_read_time = time.time() - file_read_start
             if file_content is not None:
-                print(f"✅ read_archive_file での読み込みに成功しました！")
+                print(f"✅ read_archive_file での読み込みに成功しました！({file_read_time:.6f}秒)")
                 success_path = internal_path
             else:
                 print("❌ read_archive_fileでの読み込みに失敗しました")
         except Exception as e:
-            print(f"❌ read_archive_fileでの読み込みエラー: {e}")
+            file_read_time = time.time() - file_read_start
+            print(f"❌ read_archive_fileでの読み込みエラー: {e} ({file_read_time:.6f}秒)")
             if debug_mode:
                 traceback.print_exc()
         
@@ -691,19 +696,23 @@ def test_archive_file(internal_path: str):
                     print(f"エントリ候補 {i+1}: 名前={entry.name}, パス={entry.path}")
                     
                     # このエントリのパスで再試行
+                    file_read_start = time.time()
                     try:
                         entry_content = handler.read_archive_file(current_archive_path, entry.path)
+                        file_read_time = time.time() - file_read_start
                         if entry_content is not None:
-                            print(f"✅ エントリパス '{entry.path}' での読み込みに成功しました！")
+                            print(f"✅ エントリパス '{entry.path}' での読み込みに成功しました！({file_read_time:.6f}秒)")
                             file_content = entry_content
                             success_path = entry.path
                             break
                         else:
                             print(f"❌ エントリパス '{entry.path}' での読み込みに失敗")
                     except Exception as e:
-                        print(f"❌ エントリパス '{entry.path}' での読み込みエラー: {e}")
+                        file_read_time = time.time() - file_read_start
+                        print(f"❌ エントリパス '{entry.path}' での読み込みエラー: {e} ({file_read_time:.6f}秒)")
             else:
                 print("一致するエントリが見つかりませんでした")
+                file_read_time = 0
         
         # 3. エントリ情報を取得（ファイルサイズなどの情報用）
         entry_info = None
@@ -722,68 +731,83 @@ def test_archive_file(internal_path: str):
                     print(f"指定されたパスはディレクトリです。ファイル比較テストはスキップします。")
                     return
         
-        if file_content is None:
-            # 4. バックアップとしてメモリからの読み込みを試す
-            print("\n3. バックアップ手段: メモリからの読み込みを試行...")
+        # 4. メモリからの読み込みを試す（速度比較用）
+        print("\n3. メモリからの読み込みを試行...")
+        memory_content = None
+        
+        # メモリからの読み込み速度計測
+        memory_read_start = time.time()
+        try:
+            memory_content = handler.read_file_from_bytes(current_archive, internal_path)
+            memory_read_time = time.time() - memory_read_start
             
-            try:
-                # メモリからファイルを読み込む
-                memory_content = handler.read_file_from_bytes(current_archive, internal_path)
-                if memory_content is not None:
-                    print(f"✅ メモリから読み込みに成功しました！")
+            if memory_content is not None:
+                print(f"✅ メモリから読み込みに成功しました！({memory_read_time:.6f}秒)")
+                
+                # ファイル読み込みに失敗していた場合はメモリの内容を使用
+                if file_content is None:
                     file_content = memory_content
                     success_path = internal_path + " (メモリから)"
+            else:
+                memory_read_time = time.time() - memory_read_start
+                print(f"❌ メモリからの読み込みに失敗 ({memory_read_time:.6f}秒)")
+        except Exception as e:
+            memory_read_time = time.time() - memory_read_start
+            print(f"❌ メモリからの読み込みエラー: {e} ({memory_read_time:.6f}秒)")
+            if debug_mode:
+                traceback.print_exc()
+        
+        # 5. ファイルとメモリからの読み込み結果の比較と表示
+        if file_content and memory_content:
+            print("\n4. 読み込み結果の比較:")
+            
+            # サイズ比較
+            print(f"  ファイル読み込みサイズ: {len(file_content):,} バイト")
+            print(f"  メモリ読み込みサイズ: {len(memory_content):,} バイト")
+            
+            # 内容比較
+            if file_content == memory_content:
+                print("  ✅ ファイルとメモリの内容は一致しています")
+            else:
+                print("  ⚠️ ファイルとメモリの内容が一致しません！")
+                
+                # 最初の不一致箇所を表示
+                first_mismatch = -1
+                min_len = min(len(file_content), len(memory_content))
+                for i in range(min_len):
+                    if file_content[i] != memory_content[i]:
+                        first_mismatch = i
+                        break
+                
+                if first_mismatch >= 0:
+                    print(f"  最初の不一致: {first_mismatch}バイト目")
+                    # 不一致部分の前後10バイトをHEX表示
+                    start = max(0, first_mismatch - 10)
+                    end = min(min_len, first_mismatch + 10)
+                    
+                    print(f"  ファイル[{start}:{end}]: {file_content[start:end].hex()}")
+                    print(f"  メモリ[{start}:{end}]: {memory_content[start:end].hex()}")
+            
+            # 速度比較
+            print("\n5. 読み込み速度の比較:")
+            print(f"  ファイルからの読み込み時間: {file_read_time:.6f}秒")
+            print(f"  メモリからの読み込み時間: {memory_read_time:.6f}秒")
+            
+            if file_read_time > 0 and memory_read_time > 0:
+                if memory_read_time < file_read_time:
+                    speedup = (file_read_time - memory_read_time) / file_read_time * 100
+                    print(f"  ⚡ メモリからの読み込みは {speedup:.1f}% 高速です")
+                elif file_read_time < memory_read_time:
+                    speedup = (memory_read_time - file_read_time) / memory_read_time * 100
+                    print(f"  ⚡ ファイルからの読み込みは {speedup:.1f}% 高速です")
                 else:
-                    print("❌ メモリからの読み込みも失敗しました")
-            except Exception as e:
-                print(f"❌ メモリからの読み込みエラー: {e}")
+                    print("  読み込み速度は同じです")
         
         if file_content is None:
             print("❌ エラー: すべての方法でファイル読み込みに失敗しました。")
             return
         
-        # メモリからの読み込みと比較
-        print("\n[メモリからの読み込みテスト (比較用)]")
-        memory_content = None
-        if file_content and handler.can_handle_bytes(current_archive):
-            import time
-            memory_read_start = time.time()
-            try:
-                memory_content = handler.read_file_from_bytes(current_archive, internal_path)
-                memory_read_time = time.time() - memory_read_start
-                
-                if memory_content:
-                    print(f"メモリからの読み込み成功: {len(memory_content):,} バイト ({memory_read_time:.6f}秒)")
-                    
-                    # 内容比較
-                    if file_content == memory_content:
-                        print("\n✅ ファイル内容は一致しています")
-                    else:
-                        print("\n⚠️ ファイル内容が一致しません!")
-                        print(f"  ファイル: {len(file_content):,} バイト, メモリ: {len(memory_content):,} バイト")
-                        
-                        # 不一致箇所を表示
-                        first_mismatch = -1
-                        min_len = min(len(file_content), len(memory_content))
-                        for i in range(min_len):
-                            if file_content[i] != memory_content[i]:
-                                first_mismatch = i
-                                break
-                        
-                        if first_mismatch >= 0:
-                            print(f"  最初の不一致: {first_mismatch}バイト目")
-                            # 不一致部分の前後10バイトをHEX表示
-                            start = max(0, first_mismatch - 10)
-                            end = min(min_len, first_mismatch + 10)
-                            
-                            print(f"  ファイル[{start}:{end}]: {file_content[start:end].hex()}")
-                            print(f"  メモリ[{start}:{end}]: {memory_content[start:end].hex()}")
-                else:
-                    print("❌ メモリからの読み込みに失敗")
-            except Exception as e:
-                print(f"❌ メモリからの読み込みテストでエラー: {e}")
-        
-        # 4. ファイル情報表示
+        # 6. ファイル情報表示
         print("\n[ファイル情報]")
         print(f"ファイルサイズ: {len(file_content):,} バイト")
         
