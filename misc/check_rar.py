@@ -29,6 +29,9 @@ current_archive: bytes = None
 current_archive_path: str = None
 handler = RarHandler()
 debug_mode = False
+# 全エントリリストを保持する変数を追加
+all_entries_from_file: List[EntryInfo] = []
+all_entries_from_memory: List[EntryInfo] = []
 
 
 def print_banner():
@@ -94,7 +97,7 @@ def set_archive_path(path: str) -> bool:
     Returns:
         成功した場合はTrue、失敗した場合はFalse
     """
-    global current_archive, current_archive_path
+    global current_archive, current_archive_path, all_entries_from_file, all_entries_from_memory
     
     # パスを正規化
     path = normalize_path(path)
@@ -108,6 +111,10 @@ def set_archive_path(path: str) -> bool:
         return False
         
     try:
+        # 古い全エントリリストをクリア
+        all_entries_from_file = []
+        all_entries_from_memory = []
+        
         # アーカイブファイルを読み込む
         with open(path, 'rb') as f:
             current_archive = f.read()
@@ -123,15 +130,15 @@ def set_archive_path(path: str) -> bool:
             print(f"RARハンドラがこのファイルを処理できるか: {can_handle}")
             
             if can_handle:
-                # エントリリストを取得してみる
-                entries = handler.list_entries(path)
-                print(f"エントリ検出: {len(entries)} 個")
+                # エントリリストを取得してキャッシュ
+                all_entries_from_file = handler.list_entries(path)
+                print(f"エントリ検出: {len(all_entries_from_file)} 個")
                 
                 # メモリからも試す
                 if handler.can_handle_bytes(current_archive, path):
                     print(f"バイトデータからの処理も可能です")
-                    byte_entries = handler.list_entries_from_bytes(current_archive)
-                    print(f"メモリからのエントリ検出: {len(byte_entries)} 個")
+                    all_entries_from_memory = handler.list_entries_from_bytes(current_archive)
+                    print(f"メモリからのエントリ検出: {len(all_entries_from_memory)} 個")
                 else:
                     print(f"バイトデータからの処理はサポートされていません")
         
@@ -153,7 +160,7 @@ def list_archive_contents(internal_path: str = "") -> bool:
     Returns:
         成功した場合はTrue、失敗した場合はFalse
     """
-    global current_archive, current_archive_path
+    global current_archive, current_archive_path, all_entries_from_file, all_entries_from_memory
     
     if not current_archive_path:
         print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
@@ -161,31 +168,103 @@ def list_archive_contents(internal_path: str = "") -> bool:
     
     try:
         if debug_mode:
-            print(f"ファイルからのリスト取得: {current_archive_path}")
+            print(f"キャッシュされたエントリ数: {len(all_entries_from_file)} (ファイル), {len(all_entries_from_memory)} (メモリ)")
         
         # 内部パスを正規化
         if internal_path:
             internal_path = normalize_path(internal_path)
-        
-        # RARハンドラは内部パスとアーカイブパスを組み合わせて処理する
-        if internal_path:
-            full_path = f"{current_archive_path}/{internal_path}"
-        else:
-            full_path = current_archive_path
             
-        # エントリを取得
-        entries = handler.list_entries(full_path)
+            # 内部パスがディレクトリかどうかを確認し、必要に応じて末尾にスラッシュを追加
+            if not internal_path.endswith('/'):
+                # 既存のエントリ情報からディレクトリかどうかを判定
+                dir_entry = None
+                test_path = f"{internal_path}/"
+                for entry in all_entries_from_file:
+                    if entry.path.endswith(test_path) or entry.name == internal_path and entry.type == EntryType.DIRECTORY:
+                        dir_entry = entry
+                        break
+                
+                if dir_entry:
+                    internal_path += '/'
+                    if debug_mode:
+                        print(f"内部パスをディレクトリとして正規化: {internal_path}")
         
-        # メモリからも試す
-        if debug_mode and current_archive:
-            print(f"メモリからのリスト取得: {len(current_archive)} バイト")
-            memory_entries = handler.list_entries_from_bytes(current_archive, internal_path)
-            print(f"メモリエントリ数: {len(memory_entries)}, ファイルエントリ数: {len(entries)}")
+        # キャッシュされたエントリリストを使用してフィルタリング
+        entries = []
+        dir_seen = set()  # 既に処理したディレクトリを記録
+        
+        # 対象ディレクトリのパスを構築
+        target_path = internal_path if internal_path else ""
+        
+        if debug_mode:
+            print(f"検索対象パス: '{target_path}'")
+            
+        for entry in all_entries_from_file:
+            if debug_mode:
+                print(f"処理中のエントリ: パス={entry.path}, 名前={entry.name}, タイプ={entry.type}")
+                
+            # ルートの場合はすべてのトップレベルエントリを表示
+            if not target_path:
+                # パスの最初の部分だけを抽出
+                parts = entry.path.split('/')
+                if len(parts) == 1:  # トップレベルファイル
+                    entries.append(entry)
+                elif len(parts) > 1:  # サブディレクトリ内のファイル
+                    dir_name = parts[0]
+                    if dir_name and dir_name not in dir_seen:
+                        dir_seen.add(dir_name)
+                        # ディレクトリエントリを作成
+                        dir_entry = EntryInfo(
+                            name=dir_name,
+                            path=dir_name,
+                            size=0,
+                            modified_time=None,
+                            type=EntryType.DIRECTORY
+                        )
+                        entries.append(dir_entry)
+            else:
+                # 特定のディレクトリ内のエントリを表示
+                if entry.path.startswith(target_path):
+                    # 相対パスを計算 (ターゲットパスより後の部分)
+                    rel_path = entry.path[len(target_path):]
+                    
+                    if not rel_path:
+                        # 指定したディレクトリ自体は除外
+                        continue
+                        
+                    # 直下のみ対象（サブディレクトリの中は含めない）
+                    path_parts = rel_path.split('/')
+                    
+                    if len(path_parts) == 1:  # 直下のファイル
+                        entries.append(entry)
+                    elif len(path_parts) > 1:  # サブディレクトリ内のファイル
+                        dir_name = path_parts[0]
+                        if dir_name and dir_name not in dir_seen:
+                            dir_seen.add(dir_name)
+                            
+                            # ディレクトリエントリを作成
+                            dir_path = f"{target_path}{dir_name}" if target_path.endswith('/') else f"{target_path}/{dir_name}"
+                            dir_entry = EntryInfo(
+                                name=dir_name,
+                                path=dir_path,
+                                size=0,
+                                modified_time=None,
+                                type=EntryType.DIRECTORY
+                            )
+                            entries.append(dir_entry)
         
         if not entries:
-            print(f"アーカイブ内にエントリがないか、指定されたパス '{internal_path}' が見つかりません。")
-            return False
+            # キャッシュからエントリが見つからない場合、ハンドラに直接問い合わせてみる
+            if debug_mode:
+                print("キャッシュからエントリが見つからないため、ハンドラに直接問い合わせます")
             
+            # 内部パスのみを使用して問い合わせ
+            entries = handler.list_entries(current_archive_path, internal_path)
+            
+            if not entries:
+                print(f"アーカイブ内にエントリがないか、指定されたパス '{internal_path}' が見つかりません。")
+                return False
+        
         # エントリを表示
         print("\nアーカイブの内容:")
         print("{:<40} {:>10} {:>20} {}".format("名前", "サイズ", "更新日時", "種類"))
@@ -206,6 +285,68 @@ def list_archive_contents(internal_path: str = "") -> bool:
         if debug_mode:
             traceback.print_exc()
         return False
+
+
+# 新しい共通関数を追加
+def find_entry_by_path(file_path: str) -> Optional[EntryInfo]:
+    """
+    全エントリリストから特定パスのエントリを検索する
+    
+    Args:
+        file_path: 検索するファイルパス
+    
+    Returns:
+        見つかったエントリ情報、または見つからない場合はNone
+    """
+    global all_entries_from_file, all_entries_from_memory
+    
+    if not all_entries_from_file and not all_entries_from_memory:
+        return None
+        
+    # パスを正規化
+    norm_path = normalize_path(file_path)
+    file_name = os.path.basename(norm_path)
+    
+    # デバッグ出力
+    if debug_mode:
+        print(f"エントリ検索: パス={norm_path}, ファイル名={file_name}")
+    
+    # まずはファイルから取得したエントリリストで検索
+    if all_entries_from_file:
+        # 1. 正確なパス一致を試行
+        for entry in all_entries_from_file:
+            if normalize_path(entry.path) == norm_path:
+                if debug_mode:
+                    print(f"完全パス一致でエントリを見つけました: {entry.path}")
+                return entry
+        
+        # 2. ファイル名だけの一致を試行
+        for entry in all_entries_from_file:
+            if entry.name == file_name and entry.type == EntryType.FILE:
+                if debug_mode:
+                    print(f"ファイル名一致でエントリを見つけました: {entry.path}")
+                return entry
+    
+    # メモリから取得したエントリリストでも検索
+    if all_entries_from_memory:
+        # 1. 正確なパス一致を試行
+        for entry in all_entries_from_memory:
+            if normalize_path(entry.path) == norm_path:
+                if debug_mode:
+                    print(f"メモリ: 完全パス一致でエントリを見つけました: {entry.path}")
+                return entry
+        
+        # 2. ファイル名だけの一致を試行
+        for entry in all_entries_from_memory:
+            if entry.name == file_name and entry.type == EntryType.FILE:
+                if debug_mode:
+                    print(f"メモリ: ファイル名一致でエントリを見つけました: {entry.path}")
+                return entry
+    
+    if debug_mode:
+        print(f"一致するエントリが見つかりませんでした: {file_path}")
+        
+    return None
 
 
 def extract_archive_file(file_path: str) -> bool:
@@ -230,27 +371,50 @@ def extract_archive_file(file_path: str) -> bool:
         
         print(f"ファイル '{file_path}' を抽出中...")
         
-        # まず対象がディレクトリかどうかを確認
-        full_path = f"{current_archive_path}/{file_path}"
-        entry_info = handler.get_entry_info(full_path)
+        # キャッシュからエントリを検索
+        entry_info = find_entry_by_path(file_path)
         
-        if entry_info and entry_info.type == EntryType.DIRECTORY:
-            print(f"指定されたパスはディレクトリです: {file_path}")
-            print(f"ディレクトリの内容を表示するには 'L {file_path}' コマンドを使用してください。")
-            return False
-        
-        # ファイルパスから読み込み
-        if debug_mode:
-            print(f"ファイルからの抽出: {current_archive_path} -> {file_path}")
+        if entry_info:
+            if debug_mode:
+                print(f"キャッシュからエントリ情報を取得: {entry_info.path}")
+                
+            if entry_info.type == EntryType.DIRECTORY:
+                print(f"指定されたパスはディレクトリです: {file_path}")
+                print(f"ディレクトリの内容を表示するには 'L {file_path}' コマンドを使用してください。")
+                return False
+                
+            internal_path = entry_info.path  # 正確なパスを使用
+        else:
+            # キャッシュから見つからない場合、直接問い合わせる
+            if debug_mode:
+                print(f"キャッシュにエントリが見つからないため、直接問い合わせます: {file_path}")
+                
+            entry_info = handler.get_entry_info(f"{current_archive_path}/{file_path}")
             
-        content = handler.read_file(full_path)
+            if not entry_info:
+                print(f"エラー: ファイル '{file_path}' が見つかりません。")
+                return False
+                
+            if entry_info.type == EntryType.DIRECTORY:
+                print(f"指定されたパスはディレクトリです: {file_path}")
+                print(f"ディレクトリの内容を表示するには 'L {file_path}' コマンドを使用してください。")
+                return False
+                
+            internal_path = file_path
+        
+        # ファイルパスから読み込み - 相対パスを考慮した処理
+        if debug_mode:
+            print(f"ファイルからの抽出: {current_archive_path} -> {internal_path}")
+        
+        # read_fileはアーカイブパス/内部パスの形式を期待する
+        content = handler.read_file(f"{current_archive_path}/{internal_path}")
         
         # メモリからも試す
         memory_content = None
         if current_archive and handler.can_handle_bytes(current_archive):
             if debug_mode:
-                print(f"メモリからの抽出: {len(current_archive)} バイト -> {file_path}")
-            memory_content = handler.read_file_from_bytes(current_archive, file_path)
+                print(f"メモリからの抽出: {len(current_archive)} バイト -> {internal_path}")
+            memory_content = handler.read_file_from_bytes(current_archive, internal_path)
             
             if content and memory_content:
                 if content == memory_content:
@@ -978,3 +1142,4 @@ if __name__ == "__main__":
     
     # メインループを実行
     main()
+
