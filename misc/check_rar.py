@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # RARハンドラクラスをインポート
 from arc.rar_handler import RarHandler, RARFILE_AVAILABLE
 from arc.arc import EntryInfo, EntryType
+from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
 #except ImportError as e:
 #    print(f"エラー: RARハンドラのインポートに失敗しました: {e}")
 #    sys.exit(1)
@@ -371,91 +372,92 @@ def extract_archive_file(file_path: str) -> bool:
         
         print(f"ファイル '{file_path}' を抽出中...")
         
-        # キャッシュからエントリを検索
-        entry_info = find_entry_by_path(file_path)
+        # ファイルのエンコーディング問題に対応するための準備
+        from arc.common_encodings import fix_path_encoding
+        paths_to_try = fix_path_encoding(file_path)
         
-        if entry_info:
-            if debug_mode:
-                print(f"キャッシュからエントリ情報を取得: {entry_info.path}")
+        print(f"試行するパスの候補: {', '.join(paths_to_try)}")
+        
+        # 複数のパス形式を試す
+        for i, test_path in enumerate(paths_to_try):
+            # 完全なパスを構築（アーカイブパス/内部パス）
+            full_path = f"{current_archive_path}/{test_path}"
+            
+            try:
+                print(f"パス候補 {i+1}/{len(paths_to_try)}: '{test_path}'")
+                # ファイル内容を読み込む
+                content = handler.read_file(full_path)
                 
-            if entry_info.type == EntryType.DIRECTORY:
-                print(f"指定されたパスはディレクトリです: {file_path}")
-                print(f"ディレクトリの内容を表示するには 'L {file_path}' コマンドを使用してください。")
-                return False
-                
-            internal_path = entry_info.path  # 正確なパスを使用
+                if content is not None:
+                    print(f"✅ パス '{test_path}' での読み込みに成功しました！")
+                    file_path = test_path  # 成功したパスで更新
+                    break
+            except Exception as e:
+                if debug_mode:
+                    print(f"  エラー: {e}")
         else:
-            # キャッシュから見つからない場合、直接問い合わせる
-            if debug_mode:
-                print(f"キャッシュにエントリが見つからないため、直接問い合わせます: {file_path}")
-                
-            entry_info = handler.get_entry_info(f"{current_archive_path}/{file_path}")
+            # キャッシュされたエントリから探索
+            print("すべてのパス候補で失敗。エントリリストから直接探索します...")
             
-            if not entry_info:
-                print(f"エラー: ファイル '{file_path}' が見つかりません。")
-                return False
-                
-            if entry_info.type == EntryType.DIRECTORY:
-                print(f"指定されたパスはディレクトリです: {file_path}")
-                print(f"ディレクトリの内容を表示するには 'L {file_path}' コマンドを使用してください。")
-                return False
-                
-            internal_path = file_path
-        
-        # ファイルパスから読み込み - 相対パスを考慮した処理
-        if debug_mode:
-            print(f"ファイルからの抽出: {current_archive_path} -> {internal_path}")
-        
-        # read_fileはアーカイブパス/内部パスの形式を期待する
-        content = handler.read_file(f"{current_archive_path}/{internal_path}")
-        
-        # メモリからも試す
-        memory_content = None
-        if current_archive and handler.can_handle_bytes(current_archive):
-            if debug_mode:
-                print(f"メモリからの抽出: {len(current_archive)} バイト -> {internal_path}")
-            memory_content = handler.read_file_from_bytes(current_archive, internal_path)
+            basename = os.path.basename(file_path)
+            matching_entries = []
             
-            if content and memory_content:
-                if content == memory_content:
-                    print(f"ファイルとメモリからの読み込み結果が一致: {len(content)} バイト")
+            for entry in all_entries_from_file:
+                if entry.name == basename or entry.path.endswith(file_path):
+                    matching_entries.append(entry)
+            
+            if matching_entries:
+                print(f"{len(matching_entries)}個の一致するエントリが見つかりました")
+                
+                for i, entry in enumerate(matching_entries):
+                    print(f"エントリ候補 {i+1}: 名前={entry.name}, パス={entry.path}")
+                    
+                    # このエントリパスで再試行
+                    try:
+                        full_path = f"{current_archive_path}/{entry.path}"
+                        content = handler.read_file(full_path)
+                        if content is not None:
+                            print(f"✅ エントリ '{entry.path}' からの読み込みに成功しました！")
+                            file_path = entry.path
+                            break
+                    except Exception as e:
+                        if debug_mode:
+                            print(f"  エラー: {e}")
                 else:
-                    print(f"警告: ファイル ({len(content)} バイト) とメモリ ({len(memory_content)} バイト) からの読み込み結果が異なります")
-            elif content:
-                print(f"ファイルからの読み込みには成功しましたが、メモリからは失敗しました")
-            elif memory_content:
-                print(f"ファイルからの読み込みに失敗しましたが、メモリからは成功しました")
-                content = memory_content  # 処理継続のため
+                    content = None
+            else:
+                content = None
+                print("一致するエントリが見つかりませんでした。")
         
-        # いずれかの方法で成功した内容を使用
-        final_content = content if content is not None else memory_content
+        # それでも失敗する場合はメモリからの読み込みを試す
+        if content is None and current_archive:
+            print("ファイルからの読み込みに失敗。メモリからの読み込みを試行...")
+            
+            for test_path in paths_to_try:
+                try:
+                    content = handler.read_file_from_bytes(current_archive, test_path)
+                    if content is not None:
+                        print(f"✅ メモリからパス '{test_path}' での読み込みに成功しました！")
+                        file_path = test_path
+                        break
+                except Exception as e:
+                    if debug_mode:
+                        print(f"  メモリからの読み込みエラー: {e}")
         
-        if final_content is None:
-            print(f"エラー: ファイル '{file_path}' が見つからないか、読み込めませんでした。")
+        if content is None:
+            print("❌ エラー: すべての方法でファイル読み込みに失敗しました。")
             return False
             
         # ファイルのバイナリデータに関する情報を表示
-        print(f"ファイルサイズ: {len(final_content):,} バイト")
+        print(f"ファイルサイズ: {len(content):,} バイト")
         
         # エンコーディング推定
-        encoding = None
-        is_text = True
+        from arc.common_encodings import detect_encoding, try_decode_with_encodings
         
-        # バイナリデータの最初の数バイトを確認
-        if len(final_content) > 2:
-            # BOMでエンコーディングをチェック
-            if final_content.startswith(b'\xef\xbb\xbf'):
-                encoding = 'utf-8-sig'
-            elif final_content.startswith(b'\xff\xfe'):
-                encoding = 'utf-16-le'
-            elif final_content.startswith(b'\xfe\xff'):
-                encoding = 'utf-16-be'
-                
         # バイナリか判定
         binary_bytes = 0
         ascii_bytes = 0
-        for byte in final_content[:min(1000, len(final_content))]:
-            # ASCII範囲外のバイト値が多い場合やNULLバイトがあればバイナリとみなす
+        for byte in content[:min(1000, len(content))]:
             if byte < 9 or (byte > 13 and byte < 32) or byte >= 127:
                 binary_bytes += 1
             elif 32 <= byte <= 126:
@@ -467,17 +469,10 @@ def extract_archive_file(file_path: str) -> bool:
                 
         # テキストファイルとして読み込めるか試す
         if is_text:
-            if not encoding:
-                # 一般的なエンコーディングでの変換を試みる
-                encodings = ['utf-8', 'shift_jis', 'euc-jp', 'iso-2022-jp', 'cp932']
-                for enc in encodings:
-                    try:
-                        final_content.decode(enc)
-                        encoding = enc
-                        print(f"エンコーディング自動検出: {encoding}")
-                        break
-                    except:
-                        pass
+            decoded_text, encoding = try_decode_with_encodings(content)
+            print(f"エンコーディング検出: {encoding}")
+        else:
+            encoding = None
         
         # 抽出したファイルを保存するか尋ねる
         save_path = os.path.basename(file_path)
@@ -489,16 +484,21 @@ def extract_archive_file(file_path: str) -> bool:
                 
             # ファイルを保存
             with open(save_path, 'wb') as f:
-                f.write(final_content)
+                f.write(content)
                 
-            print(f"ファイルを保存しました: {save_path} ({len(final_content):,} バイト)")
+            print(f"ファイルを保存しました: {save_path} ({len(content):,} バイト)")
             
         # テキストの場合は内容を表示
         if is_text and encoding:
-            print(f"\n===== ファイル内容 (エンコーディング: {encoding}) =====")
+            print(f"\n===== ファイル内容 =====")
             
             try:
-                text_content = final_content.decode(encoding)
+                # 既にデコード済みの場合はそれを使用
+                if 'decoded_text' in locals():
+                    text_content = decoded_text
+                else:
+                    text_content = content.decode(encoding)
+                    
                 # 長いテキストは省略表示
                 max_chars = 500
                 if len(text_content) > max_chars:
