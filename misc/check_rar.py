@@ -10,6 +10,7 @@ import sys
 import io
 import argparse
 import traceback
+import time
 from typing import List, Optional, Dict, Any
 
 # パスの追加（親ディレクトリをインポートパスに含める）
@@ -112,9 +113,33 @@ def set_archive_path(path: str) -> bool:
             current_archive = f.read()
         current_archive_path = path
         print(f"アーカイブを設定: {path} ({len(current_archive)} バイト)")
+        
+        # RARファイルとして開けるかテスト
+        if not RARFILE_AVAILABLE:
+            print("警告: rarfileパッケージがインストールされていないため、詳細検証ができません")
+        else:
+            # RARハンドラの基本機能をテスト
+            can_handle = handler.can_handle(path)
+            print(f"RARハンドラがこのファイルを処理できるか: {can_handle}")
+            
+            if can_handle:
+                # エントリリストを取得してみる
+                entries = handler.list_entries(path)
+                print(f"エントリ検出: {len(entries)} 個")
+                
+                # メモリからも試す
+                if handler.can_handle_bytes(current_archive, path):
+                    print(f"バイトデータからの処理も可能です")
+                    byte_entries = handler.list_entries_from_bytes(current_archive)
+                    print(f"メモリからのエントリ検出: {len(byte_entries)} 個")
+                else:
+                    print(f"バイトデータからの処理はサポートされていません")
+        
         return True
     except Exception as e:
         print(f"エラー: ファイルの読み込みに失敗しました: {e}")
+        if debug_mode:
+            traceback.print_exc()
         return False
 
 
@@ -142,12 +167,13 @@ def list_archive_contents(internal_path: str = "") -> bool:
         if internal_path:
             internal_path = normalize_path(internal_path)
         
-        # ファイルパスからエントリを取得
+        # RARハンドラは内部パスとアーカイブパスを組み合わせて処理する
         if internal_path:
             full_path = f"{current_archive_path}/{internal_path}"
         else:
             full_path = current_archive_path
             
+        # エントリを取得
         entries = handler.list_entries(full_path)
         
         # メモリからも試す
@@ -170,7 +196,7 @@ def list_archive_contents(internal_path: str = "") -> bool:
             size_str = "-" if entry.type == EntryType.DIRECTORY else f"{entry.size:,}"
             date_str = "-" if entry.modified_time is None else entry.modified_time.strftime("%Y-%m-%d %H:%M:%S")
             print("{:<40} {:>10} {:>20} {}".format(
-                entry.name, size_str, date_str, type_str
+                entry.name[:39], size_str, date_str, type_str
             ))
             
         print(f"\n合計: {len(entries)} エントリ")
@@ -220,91 +246,101 @@ def extract_archive_file(file_path: str) -> bool:
         content = handler.read_file(full_path)
         
         # メモリからも試す
-        if debug_mode and current_archive:
-            print(f"メモリからの抽出: {len(current_archive)} バイト -> {file_path}")
+        memory_content = None
+        if current_archive and handler.can_handle_bytes(current_archive):
+            if debug_mode:
+                print(f"メモリからの抽出: {len(current_archive)} バイト -> {file_path}")
             memory_content = handler.read_file_from_bytes(current_archive, file_path)
+            
             if content and memory_content:
-                print(f"ファイル内容比較: {'一致' if content == memory_content else '不一致'}")
-                print(f"ファイルサイズ: {len(content)} バイト, メモリ: {len(memory_content)} バイト")
+                if content == memory_content:
+                    print(f"ファイルとメモリからの読み込み結果が一致: {len(content)} バイト")
+                else:
+                    print(f"警告: ファイル ({len(content)} バイト) とメモリ ({len(memory_content)} バイト) からの読み込み結果が異なります")
             elif content:
-                print("メモリからの読み込みに失敗しました。")
+                print(f"ファイルからの読み込みには成功しましたが、メモリからは失敗しました")
             elif memory_content:
-                print("ファイルからの読み込みに失敗しましたが、メモリからは成功しました。")
+                print(f"ファイルからの読み込みに失敗しましたが、メモリからは成功しました")
                 content = memory_content  # 処理継続のため
         
-        if content is None:
+        # いずれかの方法で成功した内容を使用
+        final_content = content if content is not None else memory_content
+        
+        if final_content is None:
             print(f"エラー: ファイル '{file_path}' が見つからないか、読み込めませんでした。")
             return False
             
         # ファイルのバイナリデータに関する情報を表示
-        print(f"ファイルサイズ: {len(content):,} バイト")
+        print(f"ファイルサイズ: {len(final_content):,} バイト")
         
         # エンコーディング推定
         encoding = None
         is_text = True
         
         # バイナリデータの最初の数バイトを確認
-        if len(content) > 2:
+        if len(final_content) > 2:
             # BOMでエンコーディングをチェック
-            if content.startswith(b'\xef\xbb\xbf'):
+            if final_content.startswith(b'\xef\xbb\xbf'):
                 encoding = 'utf-8-sig'
-            elif content.startswith(b'\xff\xfe'):
+            elif final_content.startswith(b'\xff\xfe'):
                 encoding = 'utf-16-le'
-            elif content.startswith(b'\xfe\xff'):
+            elif final_content.startswith(b'\xfe\xff'):
                 encoding = 'utf-16-be'
                 
         # バイナリか判定
-        for byte in content[:min(1000, len(content))]:
+        binary_bytes = 0
+        ascii_bytes = 0
+        for byte in final_content[:min(1000, len(final_content))]:
             # ASCII範囲外のバイト値が多い場合やNULLバイトがあればバイナリとみなす
             if byte < 9 or (byte > 13 and byte < 32) or byte >= 127:
-                is_text = False
-                break
+                binary_bytes += 1
+            elif 32 <= byte <= 126:
+                ascii_bytes += 1
+        
+        # バイナリ判定の基準: 非ASCII文字が一定割合以上
+        binary_ratio = binary_bytes / max(1, binary_bytes + ascii_bytes)
+        is_text = binary_ratio < 0.1  # 10%以下なら文字列と判断
                 
         # テキストファイルとして読み込めるか試す
         if is_text:
             if not encoding:
-                try:
-                    # まずUTF-8で試す
-                    text_content = content.decode('utf-8')
-                    encoding = 'utf-8'
-                except UnicodeDecodeError:
+                # 一般的なエンコーディングでの変換を試みる
+                encodings = ['utf-8', 'shift_jis', 'euc-jp', 'iso-2022-jp', 'cp932']
+                for enc in encodings:
                     try:
-                        # 次にShift-JISで試す
-                        text_content = content.decode('cp932')
-                        encoding = 'cp932'
-                    except UnicodeDecodeError:
-                        is_text = False
+                        final_content.decode(enc)
+                        encoding = enc
+                        print(f"エンコーディング自動検出: {encoding}")
+                        break
+                    except:
+                        pass
         
         # 抽出したファイルを保存するか尋ねる
         save_path = os.path.basename(file_path)
         answer = input(f"ファイルをローカルに保存しますか？ (Y/n, デフォルト: {save_path}): ")
         
         if answer.lower() != 'n':
-            if answer and answer.lower() != 'y':
+            if answer and answer.lower() != 'y' and answer != save_path:
                 save_path = answer
                 
+            # ファイルを保存
             with open(save_path, 'wb') as f:
-                f.write(content)
-            print(f"ファイルを保存しました: {save_path}")
+                f.write(final_content)
+                
+            print(f"ファイルを保存しました: {save_path} ({len(final_content):,} バイト)")
             
         # テキストの場合は内容を表示
         if is_text and encoding:
             print(f"\n===== ファイル内容 (エンコーディング: {encoding}) =====")
             
             try:
-                text_content = content.decode(encoding)
-                # 最初の30行または3000文字を表示
-                lines = text_content.splitlines()
-                display_lines = min(30, len(lines))
-                displayed_text = '\n'.join(lines[:display_lines])
-                
-                if len(displayed_text) > 3000:
-                    displayed_text = displayed_text[:3000] + "...(省略)..."
-                    
-                print(displayed_text)
-                    
-                if display_lines < len(lines):
-                    print(f"\n(表示制限: {display_lines}/{len(lines)} 行)")
+                text_content = final_content.decode(encoding)
+                # 長いテキストは省略表示
+                max_chars = 500
+                if len(text_content) > max_chars:
+                    print(text_content[:max_chars] + "...(省略)")
+                else:
+                    print(text_content)
             except Exception as e:
                 print(f"テキスト表示エラー: {e}")
                 
@@ -395,6 +431,7 @@ def test_bytes_mode(file_path: str = None):
             traceback.print_exc()
         return False
 
+
 def test_archive_file(internal_path: str):
     """
     指定されたアーカイブ内のファイルに対してファイル/メモリ比較テストを実行する
@@ -421,6 +458,22 @@ def test_archive_file(internal_path: str):
         
         print(f"対象アーカイブ: {current_archive_path}")
         print(f"内部ファイルパス: {internal_path}")
+        
+        # エントリ情報取得
+        entry_info = handler.get_entry_info(full_path)
+        if entry_info:
+            print(f"エントリ情報:")
+            print(f"  名前: {entry_info.name}")
+            print(f"  パス: {entry_info.path}")
+            print(f"  サイズ: {entry_info.size}")
+            print(f"  タイプ: {entry_info.type}")
+        
+            if entry_info.type == EntryType.DIRECTORY:
+                print(f"指定されたパスはディレクトリです。ファイル比較テストはスキップします。")
+                return
+        else:
+            print(f"エントリ情報が取得できませんでした。ファイルが存在するか確認してください。")
+            return
         
         # 1. ファイルからの読み込み
         print("\n[1. ファイルからの読み込みテスト]")
@@ -530,12 +583,16 @@ def test_archive_file(internal_path: str):
         
         # バイナリか判定
         binary_bytes_count = 0
+        ascii_bytes_count = 0
         for byte in file_content[:min(1000, len(file_content))]:
             if byte < 9 or (byte > 13 and byte < 32) or byte >= 127:
                 binary_bytes_count += 1
+            elif 32 <= byte <= 126:
+                ascii_bytes_count += 1
         
-        # バイナリデータが少ない場合はテキストの可能性
-        is_text = binary_bytes_count < min(len(file_content) * 0.1, 100)
+        # バイナリ判定の基準: 非ASCII文字が一定割合以上
+        binary_ratio = binary_bytes_count / max(1, binary_bytes_count + ascii_bytes_count)
+        is_text = binary_ratio < 0.1  # 10%以下なら文字列と判断
         
         # テキストファイルとして読み込めるか試す
         if is_text:
@@ -575,6 +632,7 @@ def test_archive_file(internal_path: str):
         print(f"エラー: アーカイブ内ファイル比較テストに失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
+
 
 def test_specific_file(file_path: str):
     """
@@ -812,6 +870,7 @@ def test_specific_file(file_path: str):
         print(f"エラー: ファイル/メモリ比較テストに失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
+
 
 def parse_command_args(args_str: str) -> str:
     """
