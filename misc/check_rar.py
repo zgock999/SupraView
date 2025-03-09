@@ -653,89 +653,139 @@ def test_archive_file(internal_path: str):
             print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
             return
         
-        # 完全なパスを構築
-        full_path = f"{current_archive_path}/{internal_path}"
-        
         print(f"対象アーカイブ: {current_archive_path}")
         print(f"内部ファイルパス: {internal_path}")
         
-        # エントリ情報取得
-        entry_info = handler.get_entry_info(full_path)
-        if entry_info:
-            print(f"エントリ情報:")
-            print(f"  名前: {entry_info.name}")
-            print(f"  パス: {entry_info.path}")
-            print(f"  サイズ: {entry_info.size}")
-            print(f"  タイプ: {entry_info.type}")
+        # 1. 直接read_archive_fileを試す
+        print("1. read_archive_fileでの直接読み込みを試行...")
+        file_content = None
+        success_path = None
         
-            if entry_info.type == EntryType.DIRECTORY:
-                print(f"指定されたパスはディレクトリです。ファイル比較テストはスキップします。")
-                return
-        else:
-            print(f"エントリ情報が取得できませんでした。ファイルが存在するか確認してください。")
-            return
-        
-        # 1. ファイルからの読み込み
-        print("\n[1. ファイルからの読み込みテスト]")
-        
-        import time
-        file_read_start = time.time()
-        file_content = handler.read_file(full_path)
-        file_read_time = time.time() - file_read_start
-        
-        if file_content:
-            print(f"ファイル読み込み成功: {len(file_content):,} バイト ({file_read_time:.6f}秒)")
-        else:
-            print("ファイル読み込み失敗")
-            return
-        
-        # 2. メモリからの読み込み
-        print("\n[2. メモリからの読み込みテスト]")
-        if handler.can_handle_bytes(current_archive):
-            memory_read_start = time.time()
-            memory_content = handler.read_file_from_bytes(current_archive, internal_path)
-            memory_read_time = time.time() - memory_read_start
-            
-            if memory_content:
-                print(f"メモリからの読み込み成功: {len(memory_content):,} バイト ({memory_read_time:.6f}秒)")
-                
-                # 3. 内容比較
-                if file_content == memory_content:
-                    print("\n✅ ファイル内容は一致しています")
-                    
-                    # 速度比較
-                    speed_diff = file_read_time - memory_read_time
-                    if speed_diff > 0:
-                        print(f"⚡ メモリからの読み込みが {speed_diff:.6f}秒 ({(speed_diff/file_read_time)*100:.1f}%) 速いです")
-                    else:
-                        print(f"⚡ ファイルからの読み込みが {-speed_diff:.6f}秒 ({(-speed_diff/memory_read_time)*100:.1f}%) 速いです")
-                else:
-                    print("\n⚠️ ファイル内容が一致しません!")
-                    print(f"  ファイル: {len(file_content):,} バイト, メモリ: {len(memory_content):,} バイト")
-                    
-                    # 不一致箇所を表示
-                    first_mismatch = -1
-                    min_len = min(len(file_content), len(memory_content))
-                    for i in range(min_len):
-                        if file_content[i] != memory_content[i]:
-                            first_mismatch = i
-                            break
-                    
-                    if first_mismatch >= 0:
-                        print(f"  最初の不一致: {first_mismatch}バイト目")
-                        # 不一致部分の前後10バイトをHEX表示
-                        start = max(0, first_mismatch - 10)
-                        end = min(min_len, first_mismatch + 10)
-                        
-                        print(f"  ファイル[{start}:{end}]: {file_content[start:end].hex()}")
-                        print(f"  メモリ[{start}:{end}]: {memory_content[start:end].hex()}")
+        try:
+            file_content = handler.read_archive_file(current_archive_path, internal_path)
+            if file_content is not None:
+                print(f"✅ read_archive_file での読み込みに成功しました！")
+                success_path = internal_path
             else:
-                print("メモリからの読み込み失敗")
-        else:
-            print("このハンドラはメモリからの読み込みをサポートしていません")
+                print("❌ read_archive_fileでの読み込みに失敗しました")
+        except Exception as e:
+            print(f"❌ read_archive_fileでの読み込みエラー: {e}")
+            if debug_mode:
+                traceback.print_exc()
+        
+        # 2. 失敗した場合は、エントリリストから一致するものを探して再試行
+        if file_content is None:
+            print("\n2. エントリリストから一致するファイルを検索...")
+            
+            basename = os.path.basename(internal_path)
+            matching_entries = []
+            
+            for entry in all_entries_from_file:
+                if entry.name == basename or entry.path.endswith(internal_path):
+                    matching_entries.append(entry)
+            
+            if matching_entries:
+                print(f"{len(matching_entries)}個の一致するエントリが見つかりました")
+                
+                for i, entry in enumerate(matching_entries):
+                    print(f"エントリ候補 {i+1}: 名前={entry.name}, パス={entry.path}")
+                    
+                    # このエントリのパスで再試行
+                    try:
+                        entry_content = handler.read_archive_file(current_archive_path, entry.path)
+                        if entry_content is not None:
+                            print(f"✅ エントリパス '{entry.path}' での読み込みに成功しました！")
+                            file_content = entry_content
+                            success_path = entry.path
+                            break
+                        else:
+                            print(f"❌ エントリパス '{entry.path}' での読み込みに失敗")
+                    except Exception as e:
+                        print(f"❌ エントリパス '{entry.path}' での読み込みエラー: {e}")
+            else:
+                print("一致するエントリが見つかりませんでした")
+        
+        # 3. エントリ情報を取得（ファイルサイズなどの情報用）
+        entry_info = None
+        if success_path:
+            # 完全なパスを構築
+            full_path = f"{current_archive_path}/{success_path}"
+            entry_info = handler.get_entry_info(full_path)
+            if entry_info:
+                print(f"\nエントリ情報:")
+                print(f"  名前: {entry_info.name}")
+                print(f"  パス: {entry_info.path}")
+                print(f"  サイズ: {entry_info.size}")
+                print(f"  タイプ: {entry_info.type}")
+        
+                if entry_info.type == EntryType.DIRECTORY:
+                    print(f"指定されたパスはディレクトリです。ファイル比較テストはスキップします。")
+                    return
+        
+        if file_content is None:
+            # 4. バックアップとしてメモリからの読み込みを試す
+            print("\n3. バックアップ手段: メモリからの読み込みを試行...")
+            
+            try:
+                # メモリからファイルを読み込む
+                memory_content = handler.read_file_from_bytes(current_archive, internal_path)
+                if memory_content is not None:
+                    print(f"✅ メモリから読み込みに成功しました！")
+                    file_content = memory_content
+                    success_path = internal_path + " (メモリから)"
+                else:
+                    print("❌ メモリからの読み込みも失敗しました")
+            except Exception as e:
+                print(f"❌ メモリからの読み込みエラー: {e}")
+        
+        if file_content is None:
+            print("❌ エラー: すべての方法でファイル読み込みに失敗しました。")
+            return
+        
+        # メモリからの読み込みと比較
+        print("\n[メモリからの読み込みテスト (比較用)]")
+        memory_content = None
+        if file_content and handler.can_handle_bytes(current_archive):
+            import time
+            memory_read_start = time.time()
+            try:
+                memory_content = handler.read_file_from_bytes(current_archive, internal_path)
+                memory_read_time = time.time() - memory_read_start
+                
+                if memory_content:
+                    print(f"メモリからの読み込み成功: {len(memory_content):,} バイト ({memory_read_time:.6f}秒)")
+                    
+                    # 内容比較
+                    if file_content == memory_content:
+                        print("\n✅ ファイル内容は一致しています")
+                    else:
+                        print("\n⚠️ ファイル内容が一致しません!")
+                        print(f"  ファイル: {len(file_content):,} バイト, メモリ: {len(memory_content):,} バイト")
+                        
+                        # 不一致箇所を表示
+                        first_mismatch = -1
+                        min_len = min(len(file_content), len(memory_content))
+                        for i in range(min_len):
+                            if file_content[i] != memory_content[i]:
+                                first_mismatch = i
+                                break
+                        
+                        if first_mismatch >= 0:
+                            print(f"  最初の不一致: {first_mismatch}バイト目")
+                            # 不一致部分の前後10バイトをHEX表示
+                            start = max(0, first_mismatch - 10)
+                            end = min(min_len, first_mismatch + 10)
+                            
+                            print(f"  ファイル[{start}:{end}]: {file_content[start:end].hex()}")
+                            print(f"  メモリ[{start}:{end}]: {memory_content[start:end].hex()}")
+                else:
+                    print("❌ メモリからの読み込みに失敗")
+            except Exception as e:
+                print(f"❌ メモリからの読み込みテストでエラー: {e}")
         
         # 4. ファイル情報表示
-        print("\n[3. ファイル情報]")
+        print("\n[ファイル情報]")
+        print(f"ファイルサイズ: {len(file_content):,} バイト")
         
         # 画像ファイルかどうか判定
         is_image = internal_path.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'))
@@ -757,9 +807,12 @@ def test_archive_file(internal_path: str):
                 
                 if answer.lower() != 'n':
                     save_path = "preview.jpg" if not answer or answer.lower() == 'y' else answer
-                    with open(save_path, 'wb') as f:
-                        f.write(file_content)
-                    print(f"画像を保存しました: {save_path}")
+                    try:
+                        with open(save_path, 'wb') as f:
+                            f.write(file_content)
+                        print(f"✅ 画像を保存しました: {save_path}")
+                    except Exception as e:
+                        print(f"❌ 画像保存エラー: {e}")
             
             except ImportError:
                 print("PIL/Pillowモジュールがインストールされていないため、画像情報を表示できません。")
@@ -767,64 +820,83 @@ def test_archive_file(internal_path: str):
             except Exception as e:
                 print(f"画像処理エラー: {e}")
         
-        # テキストファイルかどうか判定
-        is_text = False
-        encoding = None
-        
-        # エンコーディング推定
-        if len(file_content) > 2:
-            # BOMでエンコーディングをチェック
-            if file_content.startswith(b'\xef\xbb\xbf'):
-                encoding = 'utf-8-sig'
-            elif file_content.startswith(b'\xff\xfe'):
-                encoding = 'utf-16-le'
-            elif file_content.startswith(b'\xfe\xff'):
-                encoding = 'utf-16-be'
-        
-        # バイナリか判定
-        binary_bytes_count = 0
-        ascii_bytes_count = 0
+        # バイナリ/テキスト判別
+        binary_bytes = 0
+        ascii_bytes = 0
         for byte in file_content[:min(1000, len(file_content))]:
             if byte < 9 or (byte > 13 and byte < 32) or byte >= 127:
-                binary_bytes_count += 1
+                binary_bytes += 1
             elif 32 <= byte <= 126:
-                ascii_bytes_count += 1
+                ascii_bytes += 1
         
         # バイナリ判定の基準: 非ASCII文字が一定割合以上
-        binary_ratio = binary_bytes_count / max(1, binary_bytes_count + ascii_bytes_count)
+        binary_ratio = binary_bytes / max(1, binary_bytes + ascii_bytes)
         is_text = binary_ratio < 0.1  # 10%以下なら文字列と判断
         
         # テキストファイルとして読み込めるか試す
         if is_text:
+            encoding = None
+            # BOMでエンコーディングをチェック
+            if len(file_content) > 2:
+                if file_content.startswith(b'\xef\xbb\xbf'):
+                    encoding = 'utf-8-sig'
+                elif file_content.startswith(b'\xff\xfe'):
+                    encoding = 'utf-16-le'
+                elif file_content.startswith(b'\xfe\xff'):
+                    encoding = 'utf-16-be'
+            
+            # エンコーディングを検出
             if not encoding:
-                for enc in ['utf-8', 'cp932', 'euc-jp']:
+                for enc in ['utf-8', 'cp932', 'euc-jp', 'latin-1']:
                     try:
-                        text_content = file_content.decode(enc)
+                        file_content.decode(enc)
                         encoding = enc
+                        print(f"エンコーディング検出: {encoding}")
                         break
                     except UnicodeDecodeError:
                         continue
-        
-        # テキストの場合は内容を表示
-        if is_text and encoding:
-            print(f"\n===== ファイル内容 (エンコーディング: {encoding}) =====")
             
-            try:
-                text_content = file_content.decode(encoding)
-                # 最初の20行または2000文字を表示
-                lines = text_content.splitlines()
-                display_lines = min(20, len(lines))
-                displayed_text = '\n'.join(lines[:display_lines])
+            # テキストの場合は内容を表示
+            if encoding:
+                print(f"\n===== ファイル内容 (エンコーディング: {encoding}) =====")
                 
-                if len(displayed_text) > 2000:
-                    displayed_text = displayed_text[:2000] + "...(省略)..."
+                try:
+                    text_content = file_content.decode(encoding)
+                    # 最初の20行または2000文字を表示
+                    lines = text_content.splitlines()
+                    display_lines = min(20, len(lines))
+                    displayed_text = '\n'.join(lines[:display_lines])
                     
-                print(displayed_text)
-                    
-                if display_lines < len(lines):
-                    print(f"\n(表示制限: {display_lines}/{len(lines)} 行)")
-            except Exception as e:
-                print(f"テキスト表示エラー: {e}")
+                    if len(displayed_text) > 2000:
+                        displayed_text = displayed_text[:2000] + "...(省略)..."
+                        
+                    print(displayed_text)
+                        
+                    if display_lines < len(lines):
+                        print(f"\n(表示制限: {display_lines}/{len(lines)} 行)")
+                except Exception as e:
+                    print(f"テキスト表示エラー: {e}")
+        else:
+            # バイナリファイルのタイプ判定
+            file_type = "バイナリファイル"
+            
+            # ファイルの種類を判定
+            if file_content.startswith(b'\xff\xd8\xff'):
+                file_type = "JPEGイメージ"
+            elif file_content.startswith(b'\x89PNG\r\n\x1a\n'):
+                file_type = "PNGイメージ"
+            elif file_content.startswith(b'GIF8'):
+                file_type = "GIFイメージ"
+            elif file_content.startswith(b'BM'):
+                file_type = "BMPイメージ"
+            elif file_content.startswith(b'\x1f\x8b'):
+                file_type = "GZIPアーカイブ"
+            elif file_content.startswith(b'PK\x03\x04'):
+                file_type = "ZIPアーカイブ"
+            elif file_content.startswith(b'Rar!\x1a\x07'):
+                file_type = "RARアーカイブ"
+                
+            print(f"ファイルタイプ: {file_type}")
         
         print("\nアーカイブ内ファイルのバイトモードテスト完了")
         
