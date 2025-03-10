@@ -1092,11 +1092,6 @@ class EnhancedArchiveManager(ArchiveManager):
         Returns:
             すべてのエントリ情報のリスト
         """
-        # パスの正規化（先頭のスラッシュを削除）
-        if path.startswith('/'):
-            path = path[1:]
-            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
-        
         # 探索済みエントリとプロセス済みパスをリセット
         self._all_entries = {}
         self._processed_paths = set()
