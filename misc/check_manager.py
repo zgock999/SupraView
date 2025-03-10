@@ -99,22 +99,7 @@ def set_archive_path(path: str) -> bool:
         handler_info = manager.get_handler(path)
         if handler_info:
             handler_name = handler_info.__class__.__name__
-            print(f"このファイルは '{handler_name}' で処理可能です")
-            
-            # エントリリストを取得してキャッシュ
-            start_time = time.time()
-            all_entries = manager.list_entries(path)
-            elapsed_time = time.time() - start_time
-            
-            print(f"エントリ検出: {len(all_entries)} 個 ({elapsed_time:.6f}秒)")
-            
-            # エントリタイプの内訳を表示
-            directories = sum(1 for entry in all_entries if entry.type == EntryType.DIRECTORY)
-            files = sum(1 for entry in all_entries if entry.type == EntryType.FILE)
-            archives = sum(1 for entry in all_entries if entry.type == EntryType.ARCHIVE)
-            
-            print(f"内訳: ディレクトリ {directories}, ファイル {files}, アーカイブ {archives}")
-            
+            print(f"このファイルは '{handler_name}' で処理可能です")          
             return True
         else:
             print(f"エラー: アーカイブマネージャーはこのファイルを処理できません: {path}")
@@ -152,7 +137,8 @@ def list_archive_contents(internal_path: str = "") -> bool:
         else:
             # ルートの場合は現在のアーカイブパスを使用
             print(f"アーカイブルートの内容を取得中")
-            entries = manager.list_entries(current_archive_path)
+            #entries = manager.list_entries(current_archive_path)
+            entries = manager.list_entries("")
         
         if not entries:
             print(f"アーカイブ内にエントリが見つかりません")

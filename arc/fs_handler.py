@@ -412,3 +412,13 @@ class FileSystemHandler(ArchiveHandler):
         """
         print(f"FileSystemHandler: メモリデータからのエントリ取得はサポートしていません")
         return []
+
+    def use_absolute(self) -> bool:
+        """
+        絶対パスを使用するかどうかを返す
+        ファイルシステムハンドラは絶対パスを使用する
+        
+        Returns:
+            True (常に絶対パスを使用)
+        """
+        return True

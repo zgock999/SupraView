@@ -32,6 +32,7 @@ class RarHandler(ArchiveHandler):
     
     # RARファイルの拡張子
     SUPPORTED_FORMATS = ['.rar']
+
     
     def __init__(self):
         """RARアーカイブハンドラを初期化する"""
@@ -40,6 +41,7 @@ class RarHandler(ArchiveHandler):
             self._available = False
             self._supported_formats = []
             return
+        self.debug = False
             
         print(f"RarHandler: rarfileパッケージが利用可能です (バージョン: {rarfile.__version__})")
         
@@ -102,32 +104,12 @@ class RarHandler(ArchiveHandler):
         # rarfileが利用できない場合は常にFalse
         if not RARFILE_AVAILABLE or not self._available:
             return False
-            
-        # ファイルが存在しない場合
-        if not os.path.isfile(path):
-            # アーカイブ内のパスかどうか確認
-            archive_path, _ = self._split_path(path)
-            if not archive_path:
-                return False
-            path = archive_path
-            
-            if not os.path.isfile(path):
-                return False
-        
+                  
         # 拡張子で判定
         _, ext = os.path.splitext(path.lower())
-        
-        # RARファイルかチェック
-        if ext not in self._supported_formats:
-            return False
+        print(f"RarHandler: 拡張子チェック: {ext}")
+        return ext in self._supported_formats
             
-        # 実際にRARファイルとして開けるかチェック
-        try:
-            with rarfile.RarFile(path) as rf:
-                return True
-        except Exception as e:
-            print(f"RarHandler: {path} をRARとして処理できません: {e}")
-            return False
     
     def can_handle_bytes(self, data: bytes = None, path: str = None) -> bool:
         """

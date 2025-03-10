@@ -38,6 +38,7 @@ class EntryInfo:
     is_hidden: bool = False    # 隠しファイルかどうか
     name_in_arc: Optional[str] = None  # アーカイブ内の元のファイル名（エンコード変換前）
     attrs: Dict = None         # 追加属性（拡張用）
+    cache: Optional[Union[bytes, str]] = None  # 新しいフィールド
 
     def __post_init__(self):
         """オブジェクト初期化後の処理"""
@@ -70,6 +71,15 @@ class ArchiveHandler(ABC):
     def supported_extensions(self) -> List[str]:
         """このハンドラがサポートするファイル拡張子のリスト"""
         pass
+    
+    def use_absolute(self) -> bool:
+        """
+        絶対パスを使用するかどうかを返す
+        
+        Returns:
+            絶対パスを使用する場合はTrue、相対パスを使用する場合はFalse
+        """
+        return False
     
     @abstractmethod
     def can_handle(self, path: str) -> bool:

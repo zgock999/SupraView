@@ -40,20 +40,12 @@ class ZipHandler(ArchiveHandler):
         Returns:
             処理可能な場合はTrue、そうでない場合はFalse
         """
-        if not os.path.isfile(path):
-            return False
-            
+           
         # 拡張子で簡易判定
         _, ext = os.path.splitext(path.lower())
         if ext not in self.supported_extensions:
             return False
             
-        # ZIPファイルとして開けるかどうか確認
-        try:
-            with zipfile.ZipFile(path, 'r') as zf:
-                return True
-        except:
-            return False
     
     def can_handle_bytes(self, data: bytes = None, path: str = None) -> bool:
         """
