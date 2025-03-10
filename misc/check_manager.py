@@ -69,7 +69,7 @@ def set_archive_path(path: str) -> bool:
     """
     global current_archive_path, all_entries
     
-    # パスを正規化
+    # パスを正規化（先頭の/は物理パスとして保持する）
     path = normalize_path(path)
     
     if not os.path.exists(path):
