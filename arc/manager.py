@@ -326,6 +326,11 @@ class EnhancedArchiveManager(ArchiveManager):
             ValueError: 指定されたパスのフォーマットが不正な場合
             IOError: その他のI/O操作でエラーが発生した場合
         """
+        # パスの正規化（先頭のスラッシュを削除）
+        if path.startswith('/'):
+            path = path[1:]
+            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
+        
         # パスを正規化
         norm_path = path.replace('\\', '/')
         print(f"EnhancedArchiveManager: パス '{norm_path}' のエントリを取得")
@@ -503,9 +508,10 @@ class EnhancedArchiveManager(ArchiveManager):
         # ドライブレターがある場合の特別処理 (例: Z:/)
         if len(parts) > 0 and ':' in parts[0]:
             # ネットワークドライブのパスはアーカイブパスとして扱わない
-            return "", ""
+            if not os.path.exists(norm_path):
+                return "", ""
         
-        # パスを順に構築し、アーカイブファイルを検出
+        # パスを順に構築し、物理ファイルとしてのアーカイブを検出
         test_path = ""
         for i, part in enumerate(parts):
             if i > 0:
@@ -514,9 +520,9 @@ class EnhancedArchiveManager(ArchiveManager):
             
             # 現在のパスが物理ファイルとして存在するか確認
             if os.path.isfile(test_path):
-                # アーカイブファイルかどうか判定
-                handler = super().get_handler(test_path)
-                if handler and self._is_archive_by_extension(test_path):
+                # アーカイブファイルかどうか判定（拡張子と実際のファイル存在確認）
+                _, ext = os.path.splitext(test_path.lower())
+                if ext in self._archive_extensions:
                     # アーカイブファイル発見
                     # 残りのコンポーネントが内部パス
                     internal_path = '/'.join(parts[i+1:])
@@ -570,19 +576,19 @@ class EnhancedArchiveManager(ArchiveManager):
             entry.path = entry.path.replace(temp_path, base_path)
     
 
-    def _process_archive_for_all_entries(self, base_path: str, arc_entry: EntryInfo, preload_content: bool = True) -> List[EntryInfo]:
+    def _process_archive_for_all_entries(self, base_path: str, arc_entry: EntryInfo, preload_content: bool = False) -> List[EntryInfo]:
         """
         アーカイブエントリの内容を処理し、すべてのエントリを取得する
         
         Args:
             base_path: 基準となるパス
             arc_entry: 処理するアーカイブエントリ
-            preload_content: ファイル内容を事前にキャッシュするかどうか
+            preload_content: 使用しません（将来の拡張用）
             
         Returns:
             アーカイブ内のすべてのエントリ
         """
-        debug_mode = False
+        debug_mode = True  # デバッグモードを有効化
         # 循環参照防止とネスト深度チェック
         if self._current_nest_level >= self.MAX_NEST_DEPTH:
             print(f"EnhancedArchiveManager: 最大ネスト階層 ({self.MAX_NEST_DEPTH}) に達しました")
@@ -594,6 +600,7 @@ class EnhancedArchiveManager(ArchiveManager):
         try:
             archive_path = arc_entry.path
             print(f"EnhancedArchiveManager: アーカイブ処理: {archive_path}")
+            print(f"EnhancedArchiveManager: アーカイブエントリ ({arc_entry.path} )")
 
             # 1. 親書庫のタイプと場所を判別
             parent_archive_path = None
@@ -603,123 +610,68 @@ class EnhancedArchiveManager(ArchiveManager):
             # 親書庫がルート書庫かネスト書庫かを判定
             parent_path, internal_path = self._analyze_path(archive_path)
             
-            # ルート書庫の場合（1重ネスト）- 親は物理ファイル
-            if parent_path and not internal_path:
-                # ルート書庫のパスを絶対パス化
-                parent_archive_path = parent_path
-                if self.current_path and not os.path.isabs(parent_archive_path):
-                    parent_archive_path = os.path.join(self.current_path, parent_archive_path).replace('\\', '/')
-                
-                print(f"EnhancedArchiveManager: 1重ネスト書庫 - 親書庫: {parent_archive_path}")
-            
-            # ネスト書庫の場合（2重ネスト以上）- 親は他のアーカイブ内のアーカイブ
-            elif parent_path and internal_path:
-                print(f"EnhancedArchiveManager: 2重以上のネスト書庫 - 親書庫: {parent_path}, 内部パス: {internal_path}")
-                
-                # 親書庫のエントリを探す
-                parent_entry = None
-                for entries_list in self._all_entries.values():
-                    for entry in entries_list:
-                        if entry.path == parent_path:
-                            parent_entry = entry
-                            break
-                    if parent_entry:
-                        break
-                
-                if parent_entry and parent_entry.cache is not None:
-                    # 親がキャッシュされている場合
-                    if isinstance(parent_entry.cache, bytes):
-                        # バイトデータがキャッシュされている場合
-                        parent_archive_bytes = parent_entry.cache
-                        print(f"EnhancedArchiveManager: 親書庫のバイトデータをキャッシュから取得: {len(parent_archive_bytes)} バイト")
-                    elif isinstance(parent_entry.cache, str) and os.path.exists(parent_entry.cache):
-                        # 一時ファイルパスがキャッシュされている場合
-                        parent_archive_temp_path = parent_entry.cache
-                        print(f"EnhancedArchiveManager: 親書庫の一時ファイルパスをキャッシュから取得: {parent_archive_temp_path}")
+            # パスを詳細に分析して親書庫と内部パスを特定
+            if parent_path:
+                # 親書庫が物理ファイルとして存在することを確認
+                if os.path.isfile(parent_path):
+                    # ルート書庫との関連性をチェック
+                    if parent_path == self.current_path:
+                        # カレントパスと同じ場合は1重ネスト（ルート直下）
+                        parent_archive_path = parent_path
+                        print(f"EnhancedArchiveManager: 1重ネスト書庫 - 親書庫はカレントパスと同じ: {parent_archive_path}")
+                    else:
+                        # その他の物理ファイル
+                        parent_archive_path = parent_path
+                        print(f"EnhancedArchiveManager: 1重ネスト書庫 - 親書庫: {parent_archive_path}")
                 else:
-                    # 親書庫が見つからないまたはキャッシュされていない場合、親から取得
-                    parent_handler = self.get_handler(parent_path)
-                    if parent_handler:
-                        use_parent_path = parent_path
-                        if parent_handler.use_absolute() and self.current_path:
-                            if not os.path.isabs(parent_path):
-                                use_parent_path = os.path.join(self.current_path, parent_path).replace('\\', '/')
-                        
-                        # 親書庫からネスト書庫のコンテンツを読み込む
-                        print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツを取得: {use_parent_path} -> {internal_path}")
-                        parent_archive_bytes = parent_handler.read_archive_file(use_parent_path, internal_path)
-                        
-                        if not parent_archive_bytes:
-                            print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツ取得に失敗")
-                            return []
-                        
-                        print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツを取得成功: {len(parent_archive_bytes)} バイト")
+                    print(f"EnhancedArchiveManager: 親書庫のパス {parent_path} は物理ファイルとして存在しません")
+                    return []
             else:
                 # 書庫としての情報が不明な場合
                 print(f"EnhancedArchiveManager: 処理対象書庫のパス解析に失敗: {archive_path}")
                 return []
             
-            # 2. ネスト書庫のハンドラを取得
+            # 絶対パスの確保
+            if parent_archive_path and self.current_path and not os.path.isabs(parent_archive_path):
+                parent_archive_path = os.path.join(self.current_path, parent_archive_path).replace('\\', '/')
+            
+            # 2. 親書庫のハンドラを取得
+            parent_handler = self.get_handler(parent_archive_path)
+            if not parent_handler:
+                print(f"EnhancedArchiveManager: 親書庫のハンドラが見つかりません: {parent_archive_path}")
+                return []
+            
+            # 3. ネスト書庫のコンテンツを取得
+            print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツを取得: {parent_archive_path} -> {internal_path}")
+            nested_archive_content = parent_handler.read_archive_file(parent_archive_path, internal_path)
+            
+            if not nested_archive_content:
+                print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツ取得に失敗")
+                return []
+            
+            print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツを取得成功: {len(nested_archive_content)} バイト")
+
+            # 4. ネスト書庫のハンドラを取得
             handler = self.get_handler(archive_path)
             if not handler:
                 print(f"EnhancedArchiveManager: 書庫のハンドラが見つかりません: {archive_path}")
                 return []
             
-            # 3. ネスト書庫のコンテンツを取得
-            nested_archive_content = None  # ネスト書庫の実体(bytes)
-            temp_file_path = None          # 一時ファイルパス（必要な場合）
-            
-            # 親書庫の種類に応じた処理
-            if parent_archive_path:
-                # ルート書庫からネスト書庫を取得
-                print(f"EnhancedArchiveManager: ルート書庫からネスト書庫を取得: {parent_archive_path}")
-                
-                # 親がルート書庫の場合、read_archive_fileで内容を取得
-                parent_handler = self.get_handler(parent_archive_path)
-                if parent_handler:
-                    # 内部パスは空または相対パス
-                    inner_path = internal_path if internal_path else arc_entry.path
-                    # 内部パスが絶対パスの場合は相対パスに変換
-                    if inner_path.startswith(parent_archive_path + '/'):
-                        inner_path = inner_path[len(parent_archive_path) + 1:]
-                    
-                    nested_archive_content = parent_handler.read_archive_file(parent_archive_path, inner_path)
-                    print(f"EnhancedArchiveManager: ルート書庫から取得したネスト書庫: {len(nested_archive_content) if nested_archive_content else 0} バイト")
-                else:
-                    print(f"EnhancedArchiveManager: ルート書庫のハンドラが見つかりません: {parent_archive_path}")
-                    return []
-                    
-            elif parent_archive_bytes:
-                # 親のバイトデータから直接ネスト書庫を処理
-                nested_archive_content = parent_archive_bytes
-                print(f"EnhancedArchiveManager: 親のキャッシュからネスト書庫を取得: {len(nested_archive_content)} バイト")
-                
-            elif parent_archive_temp_path:
-                # 親の一時ファイルからネスト書庫を読み込み
-                print(f"EnhancedArchiveManager: 親の一時ファイルからネスト書庫を取得: {parent_archive_temp_path}")
-                try:
-                    with open(parent_archive_temp_path, 'rb') as f:
-                        nested_archive_content = f.read()
-                    print(f"EnhancedArchiveManager: 一時ファイルから読み込み成功: {len(nested_archive_content)} バイト")
-                except Exception as e:
-                    print(f"EnhancedArchiveManager: 一時ファイルからの読み込みに失敗: {e}")
-                    return []
-            
-            # 4. ネスト書庫のコンテンツが取得できなかった場合
-            if not nested_archive_content:
-                print(f"EnhancedArchiveManager: ネスト書庫のコンテンツを取得できませんでした: {archive_path}")
-                return []
-            
             # 5. ネスト書庫のコンテンツの処理方法を決定
             # バイトデータからエントリリストを取得できるか確認
             can_process_bytes = handler.can_handle_bytes(nested_archive_content, archive_path)
-            
+
+            # 現在のエントリにcacheプロパティがあるか確認
+            if not hasattr(arc_entry, 'cache'):
+                print(f"EnhancedArchiveManager: エントリにcacheプロパティがありません。作成します。")
+                arc_entry.cache = None
+
             # キャッシュ処理 - 重要: ネスト書庫自身のコンテンツをキャッシュする
-            # ※ この時点でarc_entryにネスト書庫自体のbytesデータをキャッシュ
             if can_process_bytes:
                 # バイトデータを直接処理できる場合、バイトデータをキャッシュ
                 print(f"EnhancedArchiveManager: ネスト書庫のバイトデータをキャッシュします ({len(nested_archive_content)} バイト)")
                 arc_entry.cache = nested_archive_content
+                print(f"EnhancedArchiveManager: ネスト書庫のバイトデータをキャッシュしました ({arc_entry.path} )")
             else:
                 # バイトデータを直接処理できない場合は一時ファイルを作成してパスをキャッシュ
                 print(f"EnhancedArchiveManager: ネスト書庫の一時ファイルパスをキャッシュします")
@@ -773,14 +725,14 @@ class EnhancedArchiveManager(ArchiveManager):
                 print(f"EnhancedArchiveManager: エントリが取得できませんでした")
                 return []
                 
-            # 7. エントリリストの処理 - パスの修正のみ行い、個別のコンテンツキャッシュは行わない
-            # アーカイブ内のパスを修正（アーカイブパス/エントリパス形式）
+            # 7. エントリリストの処理 - パスの修正のみを行う（プリロードは行わない）
             result_entries = []
+            
             for entry in entries:
                 # パスを構築
                 entry_path = f"{archive_path}/{entry.path}" if entry.path else archive_path
                 
-                # 新しいエントリを作成（cacheは設定しない）
+                # 新しいエントリを作成
                 new_entry = EntryInfo(
                     name=entry.name,
                     path=entry_path,
@@ -791,7 +743,7 @@ class EnhancedArchiveManager(ArchiveManager):
                     is_hidden=entry.is_hidden,
                     name_in_arc=entry.name_in_arc,
                     attrs=entry.attrs,
-                    cache=None  # 個別エントリにはキャッシュを設定しない
+                    cache=None  # キャッシュは設定しない
                 )
                 
                 # エントリを結果に追加
@@ -802,6 +754,12 @@ class EnhancedArchiveManager(ArchiveManager):
             
             # 9. キャッシュに保存
             self._all_entries[archive_path] = marked_entries
+            
+            # キャッシュ状態のデバッグ情報
+            if debug_mode:
+                print(f"EnhancedArchiveManager: キャッシュ状況:")
+                print(f"  書庫キャッシュ: arc_entry.cache {'あり' if arc_entry.cache is not None else 'なし'}")
+                print(f"  キャッシュされたエントリパス例: {[e.path for e in marked_entries[:3]]}")
             
             return marked_entries
         
@@ -824,6 +782,11 @@ class EnhancedArchiveManager(ArchiveManager):
         Returns:
             ファイルの内容。読み込みに失敗した場合はNone
         """
+        # パスの正規化（先頭のスラッシュを削除）
+        if path.startswith('/'):
+            path = path[1:]
+            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
+        
         # まずキャッシュ済みの全エントリから検索
         content = self._read_from_cached_entries(path)
         if content is not None:
@@ -868,16 +831,79 @@ class EnhancedArchiveManager(ArchiveManager):
                         print(f"EnhancedArchiveManager: キャッシュからエントリを取得: {norm_path}")
                         
                         # キャッシュからデータを取得
-                        if entry.cache is not None:
-                            print(f"EnhancedArchiveManager: キャッシュからコンテンツを取得: {len(entry.cache)} バイト")
-                            return entry.cache
-                            
+                        if hasattr(entry, 'cache') and entry.cache is not None:
+                            # キャッシュの種類をチェック
+                            if isinstance(entry.cache, bytes):
+                                print(f"EnhancedArchiveManager: キャッシュからバイトデータコンテンツを取得: {len(entry.cache)} バイト")
+                                return entry.cache
+                            elif isinstance(entry.cache, str) and os.path.exists(entry.cache):
+                                # 一時ファイルパスの場合、ファイルから読み込む
+                                try:
+                                    with open(entry.cache, 'rb') as f:
+                                        content = f.read()
+                                        print(f"EnhancedArchiveManager: キャッシュの一時ファイルからコンテンツを取得: {len(content)} バイト")
+                                        # バイトデータでキャッシュを更新（次回の高速化のため）
+                                        entry.cache = content
+                                        return content
+                                except Exception as e:
+                                    print(f"EnhancedArchiveManager: 一時ファイルからの読み込みエラー: {e}")
+                                    # 読み込み失敗時はキャッシュをクリア
+                                    entry.cache = None
+                        
                         # キャッシュがない場合はアーカイブから読み込み
                         print(f"EnhancedArchiveManager: キャッシュされたコンテンツがありません。アーカイブから読み込みます")
                         
-                        # 親アーカイブを見つけ、ファイルを読み込む
-                        parent_archive_path, internal_path = self._analyze_path(entry.path)
+                        # 親アーカイブを特定
+                        # パスの先頭から順にアーカイブを探す方式に変更
+                        parent_archive_path = self._find_parent_archive(norm_path)
                         if parent_archive_path:
+                            # アーカイブ内の相対パスを計算
+                            if parent_archive_path == norm_path:
+                                # 自分自身がアーカイブの場合
+                                internal_path = ""
+                            else:
+                                # 相対パスを計算
+                                if norm_path.startswith(parent_archive_path + '/'):
+                                    internal_path = norm_path[len(parent_archive_path) + 1:]
+                                else:
+                                    # パス解析に失敗した場合
+                                    print(f"EnhancedArchiveManager: 親アーカイブパスの解析に失敗: {parent_archive_path} -> {norm_path}")
+                                    return None
+                                    
+                            print(f"EnhancedArchiveManager: 親アーカイブを特定: {parent_archive_path}, 内部パス: {internal_path}")
+                            
+                            # 親アーカイブエントリをキャッシュから探す
+                            parent_entry = self._find_archive_entry_in_cache(parent_archive_path)
+                            
+                            if parent_entry:
+                                print(f"EnhancedArchiveManager: 親アーカイブをキャッシュから発見: {parent_archive_path}")
+                                
+                                # 親アーカイブがキャッシュされている場合
+                                if hasattr(parent_entry, 'cache') and parent_entry.cache is not None:
+                                    # バイトデータとしてキャッシュされている場合
+                                    if isinstance(parent_entry.cache, bytes):
+                                        print(f"EnhancedArchiveManager: 親アーカイブのバイトデータキャッシュから読み込み: {len(parent_entry.cache)} バイト -> {internal_path}")
+                                        handler = self.get_handler(parent_archive_path)
+                                        if handler and handler.can_handle_bytes(parent_entry.cache):
+                                            content = handler.read_file_from_bytes(parent_entry.cache, internal_path)
+                                            if content:
+                                                # 成功したらエントリにもキャッシュ
+                                                print(f"EnhancedArchiveManager: 親アーカイブのキャッシュから読み込みに成功: {len(content)} バイト")
+                                                entry.cache = content
+                                                return content
+                                    # 一時ファイルとしてキャッシュされている場合
+                                    elif isinstance(parent_entry.cache, str) and os.path.exists(parent_entry.cache):
+                                        print(f"EnhancedArchiveManager: 親アーカイブの一時ファイルから読み込み: {parent_entry.cache} -> {internal_path}")
+                                        handler = self.get_handler(parent_entry.cache)
+                                        if handler:
+                                            content = handler.read_archive_file(parent_entry.cache, internal_path)
+                                            if content:
+                                                # 成功したらエントリにもキャッシュ
+                                                print(f"EnhancedArchiveManager: 親アーカイブの一時ファイルから読み込みに成功: {len(content)} バイト")
+                                                entry.cache = content
+                                                return content
+                            
+                            # 親アーカイブからの直接読み込み（キャッシュになければ）
                             parent_handler = self.get_handler(parent_archive_path)
                             if parent_handler:
                                 # 絶対パスを使用
@@ -886,11 +912,84 @@ class EnhancedArchiveManager(ArchiveManager):
                                     if not os.path.isabs(parent_archive_path):
                                         use_parent_path = os.path.join(self.current_path, parent_archive_path).replace('\\', '/')
                                 
+                                print(f"EnhancedArchiveManager: 親アーカイブから直接読み込み: {use_parent_path} -> {internal_path}")
                                 content = parent_handler.read_archive_file(use_parent_path, internal_path)
+                                
                                 if content:
                                     # 成功したらキャッシュに格納
+                                    print(f"EnhancedArchiveManager: コンテンツを読み込み成功: {len(content)} バイト、キャッシュに保存")
                                     entry.cache = content
                                     return content
+                                else:
+                                    print(f"EnhancedArchiveManager: 親アーカイブからの読み込みに失敗")
+                            else:
+                                print(f"EnhancedArchiveManager: 親アーカイブのハンドラが見つかりません: {parent_archive_path}")
+                        else:
+                            print(f"EnhancedArchiveManager: 親アーカイブが特定できません: {norm_path}")
+            
+            print(f"EnhancedArchiveManager: パス {norm_path} に一致するエントリがキャッシュにありませんでした")
+        
+        return None
+
+    def _find_parent_archive(self, path: str) -> str:
+        """
+        指定されたパスの親アーカイブのパスを特定する
+        
+        パスを先頭から順に解析し、アーカイブファイルを見つける
+        
+        Args:
+            path: 解析するパス
+            
+        Returns:
+            親アーカイブのパス。見つからない場合は空文字列
+        """
+        # パスを正規化
+        norm_path = path.replace('\\', '/')
+        
+        # パスをコンポーネントに分解
+        parts = norm_path.split('/')
+        
+        # パスを先頭から順に再構築していき、最後のアーカイブファイルを特定
+        current_path = ""
+        last_archive_path = ""
+        
+        for i, part in enumerate(parts):
+            # パスを構築
+            if i > 0:
+                current_path += "/"
+            current_path += part
+            
+            # 物理ファイルの場合はアーカイブかどうか確認
+            if os.path.isfile(current_path):
+                _, ext = os.path.splitext(current_path.lower())
+                if ext in self._archive_extensions:
+                    last_archive_path = current_path
+            
+            # キャッシュから拡張子がアーカイブと一致するエントリを探す
+            for entries_list in self._all_entries.values():
+                for entry in entries_list:
+                    if entry.path == current_path and entry.type == EntryType.ARCHIVE:
+                        last_archive_path = current_path
+                        break
+        
+        # 見つかった最後のアーカイブパスを返す
+        return last_archive_path
+
+    def _find_archive_entry_in_cache(self, archive_path: str) -> Optional[EntryInfo]:
+        """
+        キャッシュからアーカイブエントリを探す
+        
+        Args:
+            archive_path: 探すアーカイブのパス
+            
+        Returns:
+            見つかったアーカイブエントリ。見つからなければNone
+        """
+        # キャッシュからエントリを探す
+        for entries_list in self._all_entries.values():
+            for entry in entries_list:
+                if entry.path == archive_path and entry.type == EntryType.ARCHIVE:
+                    return entry
         
         return None
 
@@ -993,6 +1092,11 @@ class EnhancedArchiveManager(ArchiveManager):
         Returns:
             すべてのエントリ情報のリスト
         """
+        # パスの正規化（先頭のスラッシュを削除）
+        if path.startswith('/'):
+            path = path[1:]
+            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
+        
         # 探索済みエントリとプロセス済みパスをリセット
         self._all_entries = {}
         self._processed_paths = set()
@@ -1085,6 +1189,11 @@ class EnhancedArchiveManager(ArchiveManager):
                         # 結果を追加
                         all_entries.extend(nested_entries)
                         
+                        # ネスト書庫のパスに対応するキャッシュエントリを登録
+                        # ネスト書庫自身のパスを使って登録することが重要（エントリのパスと対応させる）
+                        print(f"EnhancedArchiveManager: ネスト書庫エントリをキャッシュに登録: {arc_entry.path} ({len(nested_entries)} エントリ)")
+                        self._all_entries[arc_entry.path] = nested_entries.copy()
+                        
                         # さらにネストされたアーカイブがあれば追加
                         for nested_entry in nested_entries:
                             if nested_entry.type == EntryType.ARCHIVE and nested_entry.path not in processed_archives:
@@ -1154,6 +1263,11 @@ def list_entries(path: str) -> List[EntryInfo]:
     Returns:
         エントリ情報のリスト。失敗した場合は空リスト
     """
+    # パスの正規化（先頭のスラッシュを削除）
+    if path.startswith('/'):
+        path = path[1:]
+        print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
+    
     return get_archive_manager().list_entries(path)
 
 
@@ -1167,6 +1281,11 @@ def get_entry_info(path: str) -> Optional[EntryInfo]:
     Returns:
         エントリ情報。存在しない場合はNone
     """
+    # パスの正規化（先頭のスラッシュを削除）
+    if path.startswith('/'):
+        path = path[1:]
+        print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
+    
     return get_archive_manager().get_entry_info(path)
 
 
@@ -1180,6 +1299,11 @@ def read_file(path: str) -> Optional[bytes]:
     Returns:
         ファイルの内容。読み込みに失敗した場合はNone
     """
+    # パスの正規化（先頭のスラッシュを削除）
+    if path.startswith('/'):
+        path = path[1:]
+        print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
+    
     return get_archive_manager().read_file(path)
 
 
@@ -1237,6 +1361,11 @@ def get_stream(path: str) -> Optional[BinaryIO]:
     Returns:
         ファイルストリーム。取得できない場合はNone
     """
+    # パスの正規化（先頭のスラッシュを削除）
+    if path.startswith('/'):
+        path = path[1:]
+        print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
+    
     return get_archive_manager().get_stream(path)
 
 
@@ -1250,6 +1379,11 @@ def is_archive(path: str) -> bool:
     Returns:
         アーカイブファイルならTrue、そうでなければFalse
     """
+    # パスの正規化（先頭のスラッシュを削除）
+    if path.startswith('/'):
+        path = path[1:]
+        print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
+    
     return get_archive_manager().is_archive(path)
 
 
@@ -1263,6 +1397,11 @@ def is_directory(path: str) -> bool:
     Returns:
         ディレクトリの場合はTrue、それ以外の場合はFalse
     """
+    # パスの正規化（先頭のスラッシュを削除）
+    if path.startswith('/'):
+        path = path[1:]
+        print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
+    
     return get_archive_manager().is_directory(path)
 
 
@@ -1276,4 +1415,9 @@ def get_parent_path(path: str) -> str:
     Returns:
         親ディレクトリのパス
     """
+    # パスの正規化（先頭のスラッシュを削除）
+    if path.startswith('/'):
+        path = path[1:]
+        print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
+    
     return get_archive_manager().get_parent_path(path)

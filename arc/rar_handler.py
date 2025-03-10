@@ -105,8 +105,15 @@ class RarHandler(ArchiveHandler):
         if not RARFILE_AVAILABLE or not self._available:
             return False
                   
-        # 拡張子で判定
-        _, ext = os.path.splitext(path.lower())
+        # 正規化したパスを使用
+        norm_path = path.replace('\\', '/')
+        
+        # パスの末尾にスラッシュがある場合は削除して判定する
+        if norm_path.endswith('/'):
+            norm_path = norm_path[:-1]
+        
+        # 拡張子のみでチェック
+        _, ext = os.path.splitext(norm_path.lower())
         print(f"RarHandler: 拡張子チェック: {ext}")
         return ext in self._supported_formats
             

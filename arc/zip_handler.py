@@ -40,12 +40,16 @@ class ZipHandler(ArchiveHandler):
         Returns:
             処理可能な場合はTrue、そうでない場合はFalse
         """
+        # 正規化したパスを使用
+        norm_path = path.replace('\\', '/')
+        
+        # パスの末尾にスラッシュがある場合は削除して判定する
+        if norm_path.endswith('/'):
+            norm_path = norm_path[:-1]
            
-        # 拡張子で簡易判定
-        _, ext = os.path.splitext(path.lower())
-        if ext not in self.supported_extensions:
-            return False
-            
+        # 拡張子のみでチェック
+        _, ext = os.path.splitext(norm_path.lower())
+        return ext in self.supported_extensions
     
     def can_handle_bytes(self, data: bytes = None, path: str = None) -> bool:
         """

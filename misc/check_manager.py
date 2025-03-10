@@ -277,6 +277,70 @@ def extract_archive_file(file_path: str) -> bool:
         
         print(f"ファイルを読み込みました: {len(content):,} バイト")
         
+        # ファイル解析（バイナリ/テキスト判定）
+        binary_bytes = 0
+        ascii_bytes = 0
+        for byte in content[:min(1000, len(content))]:
+            if byte < 9 or (byte > 13 and byte < 32) or byte >= 127:
+                binary_bytes += 1
+            elif 32 <= byte <= 126:
+                ascii_bytes += 1
+        
+        # バイナリ判定の基準: 非ASCII文字が一定割合以上
+        binary_ratio = binary_bytes / max(1, binary_bytes + ascii_bytes)
+        is_text = binary_ratio < 0.1  # 10%以下なら文字列と判断
+        
+        # ファイルのタイプを判定して表示
+        if is_text:
+            # テキストファイルのエンコーディング判定
+            encoding = None
+            if len(content) > 2:
+                # BOMでエンコーディングをチェック
+                if content.startswith(b'\xef\xbb\xbf'):
+                    encoding = 'utf-8-sig'
+                elif content.startswith(b'\xff\xfe'):
+                    encoding = 'utf-16-le'
+                elif content.startswith(b'\xfe\xff'):
+                    encoding = 'utf-16-be'
+            
+            if not encoding:
+                # 一般的なエンコーディングを試す
+                for enc in ['utf-8', 'cp932', 'euc-jp', 'latin-1']:
+                    try:
+                        content.decode(enc)
+                        encoding = enc
+                        print(f"エンコーディング検出: {encoding}")
+                        break
+                    except UnicodeDecodeError:
+                        pass
+            
+            print(f"ファイルタイプ: テキストファイル ({encoding or '不明なエンコーディング'})")
+        else:
+            # バイナリファイルのタイプ判定
+            file_type = "バイナリファイル"
+            
+            # ファイルの種類を判定
+            if content.startswith(b'\xff\xd8\xff'):
+                file_type = "JPEGイメージ"
+            elif content.startswith(b'\x89PNG\r\n\x1a\n'):
+                file_type = "PNGイメージ"
+            elif content.startswith(b'GIF8'):
+                file_type = "GIFイメージ"
+            elif content.startswith(b'BM'):
+                file_type = "BMPイメージ"
+            elif content.startswith(b'\x1f\x8b'):
+                file_type = "GZIPアーカイブ"
+            elif content.startswith(b'PK\x03\x04'):
+                file_type = "ZIPアーカイブ"
+            elif content.startswith(b'Rar!\x1a\x07'):
+                file_type = "RARアーカイブ"
+                
+            print(f"ファイルタイプ: {file_type}")
+            
+            # 画像ファイルの場合は、Pillowで追加情報を表示
+            if "イメージ" in file_type:
+                show_image_info(content)
+        
         # ファイルを保存するか確認
         save_path = os.path.basename(file_path)
         answer = input(f"ファイルを保存しますか？ (Y/n, デフォルト: {save_path}): ")
@@ -290,58 +354,92 @@ def extract_archive_file(file_path: str) -> bool:
             try:
                 with open(save_path, 'wb') as f:
                     f.write(content)
-                print(f"ファイルを保存しました: {save_path}")
-                return True
+                print(f"ファイルを保存しました: {save_path} ({len(content):,} バイト)")
             except Exception as e:
-                print(f"エラー: ファイル保存に失敗しました: {e}")
+                print(f"ファイル保存エラー: {e}")
                 if debug_mode:
                     traceback.print_exc()
-                return False
                 
-        # ファイルの内容を表示（テキストファイルの場合）
-        try:
-            # バイナリかテキストか判断
-            is_binary = False
-            for b in content[:min(1000, len(content))]:
-                if b < 9 or (b > 13 and b < 32):
-                    is_binary = True
-                    break
-                    
-            if not is_binary:
-                # テキストファイルとして表示を試みる
-                encoding = None
-                for enc in ['utf-8', 'cp932', 'shift-jis', 'euc-jp']:
-                    try:
-                        text = content.decode(enc)
-                        encoding = enc
-                        break
-                    except:
-                        continue
-                
-                if encoding:
-                    print(f"\nファイル内容 (エンコーディング: {encoding}):")
-                    text = content.decode(encoding)
-                    
-                    # 長すぎる場合は最初の20行だけ表示
-                    lines = text.split('\n')
-                    if len(lines) > 20:
-                        print('\n'.join(lines[:20]))
-                        print(f"...(残り {len(lines)-20} 行省略)...")
-                    else:
-                        print(text)
-                else:
-                    print("テキストファイルですが、エンコーディングを特定できませんでした。")
-            else:
-                print("バイナリファイルのため、内容表示はスキップします。")
-        except Exception as e:
-            print(f"ファイル内容の表示に失敗しました: {e}")
+        # テキストの場合は内容を表示
+        if is_text and encoding:
+            print(f"\n===== ファイル内容 (エンコーディング: {encoding}) =====")
             
+            try:
+                text = content.decode(encoding)
+                # 長いテキストは省略表示
+                max_chars = 500
+                if len(text) > max_chars:
+                    print(text[:max_chars] + "...(省略)")
+                else:
+                    print(text)
+            except Exception as e:
+                print(f"テキスト表示エラー: {e}")
+        else:
+            print("バイナリファイルのため、内容表示はスキップします。")
+                
+        # テスト完了
+        print("\n抽出テスト完了！")
         return True
     except Exception as e:
         print(f"エラー: ファイルの抽出に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
+
+
+def show_image_info(content: bytes) -> None:
+    """
+    画像ファイルの情報を表示する
+    
+    Args:
+        content: 画像ファイルのバイトデータ
+    """
+    try:
+        # PILをインポート
+        try:
+            from PIL import Image
+            from PIL.ExifTags import TAGS
+            from io import BytesIO
+        except ImportError:
+            print("PIL(Pillow)がインストールされていません。画像情報を表示できません。")
+            print("pip install Pillow でインストールできます。")
+            return
+        
+        # バイトデータから画像を開く
+        img = Image.open(BytesIO(content))
+        
+        # 画像情報を表示
+        print("\n[画像情報]")
+        print(f"形式: {img.format}")
+        print(f"サイズ: {img.width}x{img.height} ピクセル")
+        print(f"カラーモード: {img.mode}")
+        
+        # DPI情報があれば表示
+        if 'dpi' in img.info:
+            print(f"解像度: {img.info['dpi']} DPI")
+            
+        # EXIF情報があれば表示
+        if hasattr(img, '_getexif') and img._getexif():
+            exif = img._getexif()
+            if exif:
+                print("\n[EXIF情報]")
+                
+                # 主要なEXIF情報を表示
+                exif_data = {}
+                for tag_id, value in exif.items():
+                    tag = TAGS.get(tag_id, tag_id)
+                    exif_data[tag] = value
+                
+                # 主要な情報を優先表示
+                important_tags = ['Make', 'Model', 'DateTime', 'ExposureTime', 'FNumber', 'ISOSpeedRatings']
+                for tag in important_tags:
+                    if tag in exif_data:
+                        print(f"{tag}: {exif_data[tag]}")
+        
+    except Exception as e:
+        print(f"画像情報の取得に失敗しました: {e}")
+        if debug_mode:
+            traceback.print_exc()
 
 
 def show_archive_info() -> bool:
