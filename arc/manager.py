@@ -401,18 +401,22 @@ class EnhancedArchiveManager(ArchiveManager):
                     break
             
             # ファイルエントリが見つかった場合は、そのファイルを含むリストを返す
+            # アーカイブやディレクトリの場合は、その中身を探索するためにこの部分をスキップする
             if found_entry and found_entry.type == EntryType.FILE:
                 print(f"EnhancedArchiveManager: ファイルエントリを返します: {found_entry.path}")
                 return [found_entry]
             
+            # アーカイブやディレクトリの場合は、キャッシュエントリを検索して子エントリを取得
             # 2. キャッシュエントリの検索
             # 通常のディレクトリとしての検索
             if norm_path in self._all_entries:
-                print(f"EnhancedArchiveManager: 完全一致するキャッシュエントリを発見: {norm_path}")
-                return self._all_entries[norm_path]
+                if get_entry_info(norm_path).type == EntryType.FILE:
+                    print(f"EnhancedArchiveManager: 完全一致するキャッシュエントリを発見: {norm_path}")
+                    return self._all_entries[norm_path]
             elif norm_path_without_slash in self._all_entries:
-                print(f"EnhancedArchiveManager: スラッシュなしで一致するキャッシュエントリを発見: {norm_path_without_slash}")
-                return self._all_entries[norm_path_without_slash]
+                if get_entry_info(norm_path_without_slash).type == EntryType.FILE:
+                    print(f"EnhancedArchiveManager: スラッシュなしで一致するキャッシュエントリを発見: {norm_path_without_slash}")
+                    return self._all_entries[norm_path_without_slash]
             elif is_root and self.current_path and self.current_path in self._all_entries:
                 print(f"EnhancedArchiveManager: ルート要求に対してcurrent_path直下のエントリを返します: {self.current_path}")
                 
@@ -488,21 +492,38 @@ class EnhancedArchiveManager(ArchiveManager):
                                 is_direct_child = False
                     else:
                         # それ以外の場合は検索パスの直接の子か確認
-                        # 両方のパターン（スラッシュあり/なし）をチェック
-                        if entry_rel_path.startswith(search_path_with_slash):
-                            # search_path_with_slash で始まり、それ以降にスラッシュがない
-                            remaining = entry_rel_path[len(search_path_with_slash):]
-                            is_direct_child = '/' not in remaining
-                        elif entry_rel_path.startswith(search_path_without_slash + '/'):
-                            # search_path_without_slash/ で始まり、それ以降にスラッシュがない
-                            remaining = entry_rel_path[len(search_path_without_slash) + 1:]
-                            is_direct_child = '/' not in remaining
+                        
+                        # パスの階層構造を正確に判断するため完全にコンポーネントに分解
+                        entry_components = entry_rel_path.split('/')
+                        search_components = search_path_without_slash.split('/')
+                        
+                        # 空のコンポーネントをフィルタリング（特に末尾のスラッシュによる空要素）
+                        entry_components = [c for c in entry_components if c]
+                        search_components = [c for c in search_components if c]
+                        
+                        # 検索パスが空の場合は特別処理
+                        if not search_components:
+                            # ルート検索時はトップレベルのエントリのみを対象とする
+                            is_direct_child = len(entry_components) == 1
+                        else:
+                            # 検索パスのコンポーネント数チェック
+                            if len(entry_components) != len(search_components) + 1:
+                                # コンポーネント数が一致しない場合は直接の子ではない
+                                is_direct_child = False
+                            else:
+                                # 検索パスのプレフィックスチェック
+                                prefix_match = True
+                                for i in range(len(search_components)):
+                                    if entry_components[i] != search_components[i]:
+                                        prefix_match = False
+                                        break
+                                
+                                # プレフィックスが一致している場合は直接の子
+                                is_direct_child = prefix_match
                     
                     # 直接の子エントリかつ未追加の場合は結果に追加
                     if is_direct_child and entry.path not in seen_paths:
                         result.append(entry)
-                        seen_paths.add(entry.path)
-                        print(f"  発見: {entry.name} ({entry.path})")
             
             # 結果を返す
             if result:
