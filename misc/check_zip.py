@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 try:
     # ZIP関連のモジュールをインポート
-    from arc.zip_handler import ZipHandler
+    from arc.handler.zip_handler import ZipHandler
     from arc.arc import EntryInfo, EntryType
 except ImportError as e:
     print(f"エラー: モジュールのインポートに失敗しました: {e}")

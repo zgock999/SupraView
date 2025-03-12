@@ -1,48 +1,46 @@
 """
-アーカイブハンドラの登録モジュール
+標準ハンドラー登録
 
-このモジュールは、アーカイブマネージャーに標準ハンドラを登録する関数を提供します。
+標準の各種アーカイブハンドラーをアーカイブマネージャーに登録する
 """
 
-from arc.arc import ArchiveManager
-from arc.zip_handler import ZipHandler
-from arc.fs_handler import FileSystemHandler
-from arc.archive_7z_handler import Archive7zHandler
-from arc.cbz_handler import CbzHandler
-from arc.lzh_handler import LzhHandler
-from arc.rar_handler import RarHandler
+from .manager import ArchiveManager
+from .handler.handler import ArchiveHandler
 
-
+# 各ハンドラをインポート
 def register_standard_handlers(manager: ArchiveManager) -> None:
     """
-    標準ハンドラをアーカイブマネージャーに登録する
+    標準のアーカイブハンドラを登録する
     
     Args:
-        manager: ハンドラを登録するArchiveManagerインスタンス
+        manager: ハンドラを登録するアーカイブマネージャー
     """
-    # ファイルシステムハンドラを登録（常に最初に登録）
-    manager.register_handler(FileSystemHandler())
-    print("ファイルシステムハンドラを登録しました")
-
-    # 7-Zipハンドラを登録（RAR対応のため）
-#    manager.register_handler(Archive7zHandler())
-#    print("7-Zipアーカイブハンドラを登録しました")
-        
-    # RARハンドラを登録
-    manager.register_handler(RarHandler())
-    print("RARアーカイブハンドラを登録しました")
+    # ファイルシステムハンドラ
+    try:
+        from .handler.fs_handler import FileSystemHandler
+        print("FileSystemHandler登録中...")
+        fs_handler = FileSystemHandler()
+        manager.register_handler(fs_handler)
+    except Exception as e:
+        print(f"FileSystemHandler登録エラー: {e}")
     
-    # ZIPハンドラを登録
-    manager.register_handler(ZipHandler())
-    print("ZIPハンドラを登録しました")
+    # ZIPハンドラ
+    try:
+        from .handler.zip_handler import ZipHandler  # インポートパス修正
+        print("ZipHandler登録中...")
+        zip_handler = ZipHandler()
+        manager.register_handler(zip_handler)
+    except Exception as e:
+        print(f"ZipHandler登録エラー: {e}")
     
-    # LZHハンドラを登録
-#    manager.register_handler(LzhHandler())
-#    print("LZH/LHAアーカイブハンドラを登録しました")
-    
-    # CBZハンドラを登録
-#    manager.register_handler(CbzHandler())
-#    print("CBZ漫画アーカイブハンドラを登録しました")
+    # RARハンドラ
+    try:
+        from .handler.rar_handler import RarHandler  # インポートパス修正
+        print("RarHandler登録中...")
+        rar_handler = RarHandler()
+        manager.register_handler(rar_handler)
+    except Exception as e:
+        print(f"RarHandler登録エラー: {e}")
 
 
 def create_archive_manager() -> ArchiveManager:

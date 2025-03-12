@@ -15,12 +15,14 @@ from typing import List, Optional, Dict, Any
 
 # パスの追加（親ディレクトリをインポートパスに含める）
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# アーカイブマネージャークラスをインポート
+from arc.enhanced import EnhancedArchiveManager
+from arc.interface import get_archive_manager  # interfaceモジュールからインポート
+from arc.arc import EntryInfo, EntryType
+from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
 
 try:
-    # アーカイブマネージャークラスをインポート
-    from arc.manager import EnhancedArchiveManager, get_archive_manager
-    from arc.arc import EntryInfo, EntryType, ArchiveHandler
-    from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
+    pass
 except ImportError as e:
     print(f"エラー: アーカイブマネージャーのインポートに失敗しました: {e}")
     sys.exit(1)
@@ -48,6 +50,7 @@ def print_help():
     print("  L [path]      - アーカイブ内のファイル/ディレクトリを一覧表示（List archive contents）")
     print("  R [path]      - アーカイブ内を再帰的に一覧表示（Recursive list all entries）")
     print("  RC            - キャッシュを持つエントリを表示（Show cached entries）")
+    print("  RR            - キャッシュの全エントリのパスをダンプ（Dump all cached rel_paths）")
     print("  E <path>      - アーカイブからファイルを抽出（Extract file from archive）")
     print("                  空白を含むパスは引用符で囲みます")
     print("  I             - アーカイブ情報を表示（Information about archive）")
@@ -644,6 +647,56 @@ def show_cached_entries() -> bool:
         return False
 
 
+def show_cached_entry_paths() -> bool:
+    """
+    キャッシュされたすべてのエントリのrel_pathを表示する
+    
+    Returns:
+        成功した場合はTrue、失敗した場合はFalse
+    """
+    global current_archive_path, manager
+    
+    if not current_archive_path:
+        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
+        return False
+    
+    try:
+        # キャッシュからエントリを取得
+        all_entries_dict = manager.get_entry_cache()
+        if not all_entries_dict:
+            print(f"キャッシュにエントリが見つかりませんでした。")
+            return False
+        
+        # すべてのキャッシュエントリを集める
+        all_rel_paths = []
+        for path, entries in all_entries_dict.items():
+            for entry in entries:
+                if hasattr(entry, 'rel_path') and entry.rel_path:
+                    all_rel_paths.append(entry.rel_path)
+        
+        if not all_rel_paths:
+            print("rel_path属性を持つエントリはありません。")
+            return False
+        
+        # 重複を削除して並び替え
+        unique_rel_paths = sorted(set(all_rel_paths))
+        
+        # rel_pathを表示
+        print("\nキャッシュされている全エントリのrel_path:")
+        print("-" * 80)
+        
+        for i, rel_path in enumerate(unique_rel_paths):
+            print(f"{i+1:4d}. {rel_path}")
+        
+        print(f"\n合計: {len(unique_rel_paths)} 個のユニークなパス")
+        return True
+    except Exception as e:
+        print(f"エラー: キャッシュエントリパス表示に失敗しました: {e}")
+        if debug_mode:
+            traceback.print_exc()
+        return False
+
+
 def parse_command_args(args_str: str) -> str:
     """
     コマンド引数を解析して、引用符で囲まれた文字列を適切に処理する
@@ -684,23 +737,29 @@ def main():
             if not cmd_input:
                 continue
                 
-            cmd = cmd_input[0].upper()
-            args_str = cmd_input[1:].strip() if len(cmd_input) > 1 else ""
+            cmd = cmd_input.upper()
             
-            # 2文字コマンドの処理
-            if cmd_input.upper() == 'RC':
+            # コマンド処理
+            if cmd == 'Q':
+                print("終了します。")
+                break
+            elif cmd == '?':
+                print_help()
+            elif cmd == 'RR':
+                show_cached_entry_paths()
+                continue
+            elif cmd == 'RC':
                 show_cached_entries()
                 continue
+                
+            # 単一文字コマンドとその引数の処理
+            cmd = cmd_input[0].upper()
+            args_str = cmd_input[1:].strip() if len(cmd_input) > 1 else ""
             
             # 引数を解析（引用符で囲まれたパスを適切に処理）
             args = parse_command_args(args_str)
             
-            if cmd == 'Q':
-                print("終了します。")
-                break
-            elif cmd == '?' or cmd == 'H':
-                print_help()
-            elif cmd == 'S':
+            if cmd == 'S':
                 if not args:
                     print("エラー: アーカイブパスを指定してください。例: S /path/to/archive.zip")
                     print("       空白を含むパスは S \"C:/Program Files/file.zip\" のように指定してください")
@@ -724,7 +783,7 @@ def main():
                 debug_mode = not debug_mode
                 print(f"デバッグモード: {'オン' if debug_mode else 'オフ'}")
             else:
-                print(f"未知のコマンド: {cmd}。'?'と入力してヘルプを表示してください。")
+                print(f"未知のコマンド: {cmd_input}。'?'と入力してヘルプを表示してください。")
                 
         except KeyboardInterrupt:
             print("\n中断されました。終了するには 'Q' を入力してください。")

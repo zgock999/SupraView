@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, BinaryIO, Dict
 
-from .arc import ArchiveHandler, EntryInfo, EntryType
-
+from arc.arc import EntryInfo, EntryType
+from .handler import ArchiveHandler  # 重複import修正
 
 class FileSystemHandler(ArchiveHandler):
     """

@@ -4,13 +4,14 @@ ZIPアーカイブハンドラ
 ZIPアーカイブファイルへのアクセスを提供するハンドラ
 """
 import os
-import zipfile
-import datetime
 import io
+import zipfile
 import traceback
+import datetime
 from typing import List, Optional, Dict, Any, BinaryIO, Tuple, Set, Union
 
-from .arc import ArchiveHandler, EntryInfo, EntryType
+from arc.arc import EntryInfo, EntryType
+from .handler import ArchiveHandler  # 重複import修正
 
 
 class ZipHandler(ArchiveHandler):
@@ -22,6 +23,7 @@ class ZipHandler(ArchiveHandler):
     
     def __init__(self):
         """ZIPアーカイブハンドラを初期化する"""
+        super().__init__()  # 親クラス初期化を追加
         # ZIP構造キャッシュの追加
         self.structure_cache: Dict[str, Dict[str, Dict]] = {}
         

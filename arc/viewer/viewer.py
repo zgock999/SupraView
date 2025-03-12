@@ -34,8 +34,9 @@ try:
     )
     
     # アーカイブマネージャーのインポート
-    from arc.manager import EnhancedArchiveManager, get_archive_manager
+    from arc.interface import get_archive_manager  # interfaceモジュールからインポート
     from arc.arc import EntryInfo, EntryType
+    from arc.enhanced import EnhancedArchiveManager
     
     # プレビューウィジェットのインポート
     from arc.viewer.preview import FilePreviewWidget

@@ -9,7 +9,7 @@ import os
 import datetime
 from typing import List, Optional, Dict, Any, BinaryIO, Tuple
 
-from .arc import ArchiveHandler, EntryInfo, EntryType
+from ..arc import ArchiveHandler, EntryInfo, EntryType
 
 # lhafileモジュールが必要（Pure Python実装）
 try:

@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 #try:
 # RARハンドラクラスをインポート
-from arc.rar_handler import RarHandler, RARFILE_AVAILABLE
+from arc.handler.rar_handler import RarHandler, RARFILE_AVAILABLE
 from arc.arc import EntryInfo, EntryType
 from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
 #except ImportError as e:

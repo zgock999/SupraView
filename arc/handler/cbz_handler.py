@@ -9,7 +9,7 @@ import os
 from typing import List, Optional
 
 from .zip_handler import ZipHandler
-from .arc import EntryInfo, EntryType
+from ..arc import EntryInfo, EntryType
 
 
 class CbzHandler(ZipHandler):

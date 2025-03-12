@@ -20,7 +20,8 @@ except ImportError:
     print("RarHandler: また、UnRARが必要です - Windows版は自動的にダウンロードされます。")
     print("RarHandler: Unix系では別途UnRARをインストールしてください。")
 
-from .arc import ArchiveHandler, EntryInfo, EntryType
+from ..arc import EntryInfo, EntryType
+from .handler import ArchiveHandler  # 正しいimportパス
 
 
 class RarHandler(ArchiveHandler):
@@ -36,6 +37,7 @@ class RarHandler(ArchiveHandler):
     
     def __init__(self):
         """RARアーカイブハンドラを初期化する"""
+        super().__init__()  # 親クラス初期化を追加
         # rarfileが利用可能かチェック
         if not RARFILE_AVAILABLE:
             self._available = False
