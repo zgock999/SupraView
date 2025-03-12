@@ -26,6 +26,7 @@ class ArchiveManager:
         """初期化"""
         self.handlers: List[ArchiveHandler] = []
         self._handler_cache: Dict[str, ArchiveHandler] = {}
+        self.current_path: str = ""
     
     def get_handler(self, path: str) -> Optional[ArchiveHandler]:
         """
@@ -42,23 +43,24 @@ class ArchiveManager:
         
         # キャッシュをチェック
         if norm_path in self._handler_cache:
-            print(f"Handler found in cache: {self._handler_cache[norm_path].__class__.__name__}")
-            return self._handler_cache[norm_path]
+            handler = self._handler_cache[norm_path]
+            # ハンドラのcurrent_pathを更新
+            if self.current_path:
+                handler.set_current_path(self.current_path)
+            print(f"Handler found in cache: {handler.__class__.__name__}")
+            return handler
         
         print(f"Getting handler for path: {norm_path}")
         
         # 各ハンドラでチェック
         for handler in self.handlers.__reversed__():
-            # ハンドラが絶対パスを要求し、パスが相対パスの場合は調整
-            check_path = norm_path
-            if (handler.use_absolute() and hasattr(self, 'current_path') and self.current_path):
-                if not os.path.isabs(check_path):
-                    abs_path = os.path.join(self.current_path, check_path)
-                    print(f"Converting to absolute path for handler: {check_path} -> {abs_path}")
-                    check_path = abs_path.replace('\\', '/')
+            # ハンドラにcurrent_pathを設定
+            if self.current_path:
+                handler.set_current_path(self.current_path)
+            print(f"checking: {handler.__class__.__name__}")
             
             try:
-                if handler.can_handle(check_path):
+                if handler.can_handle(norm_path):
                     print(f"Handler found: {handler.__class__.__name__}")
                     # キャッシュに追加
                     self._handler_cache[norm_path] = handler
@@ -78,6 +80,9 @@ class ArchiveManager:
             handler: 登録するハンドラ
         """
         self.handlers.append(handler)
+        # 現在のcurrent_pathを設定
+        if self.current_path:
+            handler.set_current_path(self.current_path)
     
     def clear_cache(self) -> None:
         """キャッシュをクリアする"""
@@ -97,14 +102,7 @@ class ArchiveManager:
         if (handler is None):
             return []
         
-        # ハンドラが絶対パスを要求する場合は調整
-        use_path = path
-        if handler.use_absolute() and hasattr(self, 'current_path') and self.current_path:
-            if not os.path.isabs(path):
-                use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                print(f"Using absolute path for list_entries: {path} -> {use_path}")
-        
-        return handler.list_entries(use_path)
+        return handler.list_entries(path)
     
     def get_entry_info(self, path: str) -> Optional[EntryInfo]:
         """
@@ -120,14 +118,7 @@ class ArchiveManager:
         if handler is None:
             return None
         
-        # ハンドラが絶対パスを要求する場合は調整
-        use_path = path
-        if handler.use_absolute() and hasattr(self, 'current_path') and self.current_path:
-            if not os.path.isabs(path):
-                use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                print(f"Using absolute path for get_entry_info: {path} -> {use_path}")
-        
-        return handler.get_entry_info(use_path)
+        return handler.get_entry_info(path)
     
     def read_file(self, path: str) -> Optional[bytes]:
         """
@@ -139,18 +130,8 @@ class ArchiveManager:
         Returns:
             ファイルの内容。読み込みに失敗した場合はNone
         """
-        handler = self.get_handler(path)
-        if handler is None:
-            return None
-        
-        # ハンドラが絶対パスを要求する場合は調整
-        use_path = path
-        if handler.use_absolute() and hasattr(self, 'current_path') and self.current_path:
-            if not os.path.isabs(path):
-                use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                print(f"Using absolute path for read_file: {path} -> {use_path}")
-        
-        return handler.read_file(use_path)
+        # 抽象メソッド - サブクラスで実装する必要がある
+        raise NotImplementedError("サブクラスで実装する必要があります")
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
         """
@@ -165,15 +146,8 @@ class ArchiveManager:
         handler = self.get_handler(path)
         if handler is None:
             return None
-            
-        # ハンドラが絶対パスを要求する場合は調整
-        use_path = path
-        if handler.use_absolute() and hasattr(self, 'current_path') and self.current_path:
-            if not os.path.isabs(path):
-                use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                print(f"Using absolute path for get_stream: {path} -> {use_path}")
         
-        return handler.get_stream(use_path)
+        return handler.get_stream(path)
     
     def is_archive(self, path: str) -> bool:
         """
@@ -201,15 +175,8 @@ class ArchiveManager:
         handler = self.get_handler(path)
         if handler is None:
             return False
-            
-        # ハンドラが絶対パスを要求する場合は調整
-        use_path = path
-        if handler.use_absolute() and hasattr(self, 'current_path') and self.current_path:
-            if not os.path.isabs(path):
-                use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                print(f"Using absolute path for is_directory: {path} -> {use_path}")
         
-        return handler.is_directory(use_path)
+        return handler.is_directory(path)
     
     def get_parent_path(self, path: str) -> str:
         """
@@ -229,15 +196,8 @@ class ArchiveManager:
             if (last_slash >= 0):
                 return norm_path[:last_slash]
             return ""
-            
-        # ハンドラが絶対パスを要求する場合は調整
-        use_path = path
-        if handler.use_absolute() and hasattr(self, 'current_path') and self.current_path:
-            if not os.path.isabs(path):
-                use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                print(f"Using absolute path for get_parent_path: {path} -> {use_path}")
         
-        return handler.get_parent_path(use_path)
+        return handler.get_parent_path(path)
         
     def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
         """
@@ -253,15 +213,22 @@ class ArchiveManager:
         handler = self.get_handler(archive_path)
         if handler is None:
             return None
-            
-        # ハンドラが絶対パスを要求する場合は調整
-        use_archive_path = archive_path
-        if handler.use_absolute() and hasattr(self, 'current_path') and self.current_path:
-            if not os.path.isabs(archive_path):
-                use_archive_path = os.path.join(self.current_path, archive_path).replace('\\', '/')
-                print(f"Using absolute archive path: {archive_path} -> {use_archive_path}")
         
-        return handler.read_archive_file(use_archive_path, file_path)
+        return handler.read_archive_file(archive_path, file_path)
+
+    def set_current_path(self, path: str) -> None:
+        """
+        現在のベースパスを設定する
+        
+        Args:
+            path: 設定するベースパス
+        """
+        # パスを正規化
+        self.current_path = path.replace('\\', '/')
+        
+        # 全ハンドラーにcurrent_pathを設定
+        for handler in self.handlers:
+            handler.set_current_path(self.current_path)
 
 
 class EnhancedArchiveManager(ArchiveManager):
@@ -288,8 +255,6 @@ class EnhancedArchiveManager(ArchiveManager):
         self._all_entries: Dict[str, List[EntryInfo]] = {}
         # 処理済みパスの追跡用セット
         self._processed_paths: Set[str] = set()
-        # 現在のベースパス（このパスからの相対パスでエントリを管理）
-        self.current_path: str = ""
         # 一時ファイルの追跡（クリーンアップ用）
         self._temp_files: Set[str] = set()
     
@@ -301,6 +266,13 @@ class EnhancedArchiveManager(ArchiveManager):
             self._archive_extensions.extend(handler.supported_extensions)
         # 重複を除去
         self._archive_extensions = list(set(self._archive_extensions))
+        
+        # FileSystemHandlerにアーカイブ拡張子を設定
+        for handler in self.handlers:
+            if handler.__class__.__name__ == 'FileSystemHandler':
+                if hasattr(handler, 'set_archive_extensions'):
+                    handler.set_archive_extensions(self._archive_extensions)
+                    break
     
     def _is_archive_by_extension(self, path: str) -> bool:
         """パスがアーカイブの拡張子を持つかどうかを判定する"""
@@ -309,6 +281,72 @@ class EnhancedArchiveManager(ArchiveManager):
             
         _, ext = os.path.splitext(path.lower())
         return ext in self._archive_extensions
+    
+    def get_handler(self, path: str) -> Optional[ArchiveHandler]:
+        """
+        指定されたパスを処理できるハンドラを取得する
+        
+        Args:
+            path: 処理するファイルのパス
+            
+        Returns:
+            ハンドラのインスタンス。処理できるハンドラがない場合はNone
+        """
+        # パスを正規化
+        norm_path = path.replace('\\', '/')
+        
+        # キャッシュをチェック
+        if norm_path in self._handler_cache:
+            handler = self._handler_cache[norm_path]
+            # ハンドラのcurrent_pathを更新
+            if self.current_path:
+                handler.set_current_path(self.current_path)
+            print(f"Handler found in cache: {handler.__class__.__name__}")
+            return handler
+        
+        print(f"Getting handler for path: {norm_path}")
+        
+        # アーカイブのアクセスパターンを検出（末尾がスラッシュで終わるアーカイブパス）
+        if norm_path.endswith('/'):
+            # アーカイブ内部アクセス - アーカイブ名を抽出
+            base_path = norm_path.rstrip('/')
+            
+            # アーカイブファイルが存在するか確認
+            if os.path.isfile(base_path):
+                # ファイル拡張子を確認
+                _, ext = os.path.splitext(base_path.lower())
+                
+                # アーカイブハンドラを探す
+                for handler in self.handlers.__reversed__():
+                    # ハンドラにcurrent_pathを設定
+                    if self.current_path:
+                        handler.set_current_path(self.current_path)
+                    
+                    if ext in handler.supported_extensions and handler.can_handle(base_path):
+                        # キャッシュに追加
+                        self._handler_cache[norm_path] = handler
+                        print(f"Archive directory handler found: {handler.__class__.__name__}")
+                        return handler
+        
+        # 通常のパス処理も逆順にハンドラを検索する
+        for handler in self.handlers.__reversed__():
+            # ハンドラにcurrent_pathを設定
+            if self.current_path:
+                handler.set_current_path(self.current_path)
+            print(f"checking: {handler.__class__.__name__}")
+            
+            try:
+                if handler.can_handle(norm_path):
+                    # このハンドラで処理可能
+                    self._handler_cache[norm_path] = handler
+                    print(f"Handler matched: {handler.__class__.__name__}")
+                    return handler
+            except Exception as e:
+                print(f"Handler error ({handler.__class__.__name__}): {e}")
+        
+        # 該当するハンドラが見つからない
+        print(f"No handler found for: {norm_path}")
+        return None
     
     def list_entries(self, path: str) -> List[EntryInfo]:
         """
@@ -335,93 +373,184 @@ class EnhancedArchiveManager(ArchiveManager):
         norm_path = path.replace('\\', '/')
         print(f"EnhancedArchiveManager: パス '{norm_path}' のエントリを取得")
         
-        # まず、キャッシュされたエントリリストがあるかチェック
+        # 空のパスはルート階層を表す
+        is_root = not norm_path
+        
+        # キャッシュされたエントリリストを検索
         if self._all_entries:
             print(f"EnhancedArchiveManager: キャッシュされた全エントリから検索します ({sum(len(entries) for entries in self._all_entries.values())} エントリ)")
             
-            # 1. 完全一致のキャッシュエントリをまず探す
+            # 末尾のスラッシュを正規化したパス
+            norm_path_without_slash = norm_path.rstrip('/')
+                       
+            # 1. 直接対象のファイルを全キャッシュから検索する
+            # ファイル自体を取得しようとしている場合（ディレクトリの中身ではなく）
+            found_entry = None
+            for cache_entries in self._all_entries.values():
+                for entry in cache_entries:
+                    # パスの完全一致を確認
+                    if entry.rel_path.rstrip('/') == norm_path_without_slash:
+                        print(f"EnhancedArchiveManager: 完全一致するファイルエントリを発見: {entry.path}")
+                        if entry.type == EntryType.FILE:
+                            if norm_path.endswith('/'):
+                                print(f"EnhancedArchiveManager: 指定されたパスはファイルだが末尾にスラッシュがついています: {norm_path}")
+                                raise ValueError(f"指定されたパス '{path}' はファイルですが、末尾にスラッシュがついています")
+                        found_entry = entry
+                        break
+                if found_entry:
+                    break
+            
+            # ファイルエントリが見つかった場合は、そのファイルを含むリストを返す
+            if found_entry and found_entry.type == EntryType.FILE:
+                print(f"EnhancedArchiveManager: ファイルエントリを返します: {found_entry.path}")
+                return [found_entry]
+            
+            # 2. キャッシュエントリの検索
+            # 通常のディレクトリとしての検索
             if norm_path in self._all_entries:
-                print(f"EnhancedArchiveManager: パスに対する直接キャッシュを発見: {norm_path}")
+                print(f"EnhancedArchiveManager: 完全一致するキャッシュエントリを発見: {norm_path}")
                 return self._all_entries[norm_path]
+            elif norm_path_without_slash in self._all_entries:
+                print(f"EnhancedArchiveManager: スラッシュなしで一致するキャッシュエントリを発見: {norm_path_without_slash}")
+                return self._all_entries[norm_path_without_slash]
+            elif is_root and self.current_path and self.current_path in self._all_entries:
+                print(f"EnhancedArchiveManager: ルート要求に対してcurrent_path直下のエントリを返します: {self.current_path}")
+                
+                # アーカイブのルート（または任意のルート）の場合
+                # rel_pathを使って直接の子エントリのみをフィルタリング
+                result = []
+                seen_paths = set()  # 重複回避用
+                
+                # すべてのキャッシュされたエントリから直接の子エントリを検索
+                for entries_list in self._all_entries.values():
+                    for entry in entries_list:
+                        rel_path = entry.rel_path.rstrip('/')
+                        
+                        # ルートディレクトリの直接の子エントリかチェック
+                        # (直接の子は、スラッシュを含まないか、最初のスラッシュ以降にスラッシュがない)
+                        if rel_path and '/' not in rel_path:
+                            # 直接の子エントリの場合
+                            if entry.path not in seen_paths:
+                                result.append(entry)
+                                seen_paths.add(entry.path)
+                                print(f"  発見: {entry.name} ({entry.path})")
+                
+                if result:
+                    print(f"EnhancedArchiveManager: ルートから {len(result)} 直接の子エントリを取得しました")
+                    return result
+                
+                # 直接の子がない場合（通常ありえない）、元の処理を実行
+                print(f"EnhancedArchiveManager: 直接の子エントリが見つからないため、すべてのエントリを返します")
+                return self._all_entries[self.current_path]
             
-            # 2. キャッシュからエントリを抽出
+            # 3. キャッシュから直接の子エントリを抽出
             result = []
-            seen_paths = set()  # 既に追加したパス
-            seen_dirs = set()   # 既に追加したディレクトリ
+            seen_paths = set()  # 重複回避用
             
-            # すべてのキャッシュされたエントリに対して処理
+            # 検索パスの準備（末尾のスラッシュ有無両方の形式）
+            search_path = norm_path
+            search_path_with_slash = norm_path if norm_path.endswith('/') else norm_path + '/'
+            search_path_without_slash = norm_path_without_slash
+            
+            print(f"EnhancedArchiveManager: 検索パス {search_path} の直接の子エントリを検索")
+            
+            # すべてのキャッシュされたエントリから直接の子エントリを検索
             for cache_path, entries in self._all_entries.items():
                 for entry in entries:
-                    entry_path = entry.path
+                    # エントリの相対パスを取得して判定
+                    entry_path = entry.path.rstrip('/')
+                    entry_rel_path = entry.rel_path.rstrip('/') if entry.rel_path else entry_path
                     
-                    # 指定されたパスがエントリの親パスとして一致するかチェック
-                    if self._is_parent_dir(norm_path, entry_path):
-                        # エントリパスから直接的な子要素を抽出
-                        child_path = self._get_child_path(norm_path, entry_path)
-                        if child_path:
-                            # '/'を含む場合はディレクトリ
-                            if '/' in child_path:
-                                dir_name = child_path.split('/')[0]
-                                dir_path = f"{norm_path}/{dir_name}" if norm_path else dir_name
-                                
-                                # 既に追加済みのディレクトリはスキップ
-                                if dir_path in seen_dirs:
-                                    continue
-                                    
-                                seen_dirs.add(dir_path)
-                                
-                                # ディレクトリエントリを作成
-                                dir_entry = EntryInfo(
-                                    name=dir_name,
-                                    path=dir_path,
-                                    type=EntryType.DIRECTORY,
-                                    size=0,
-                                    modified_time=None
-                                )
-                                if dir_path not in seen_paths:
-                                    seen_paths.add(dir_path)
-                                    result.append(dir_entry)
+                    # 検索パス自体と同じエントリは除外
+                    if entry_path == norm_path_without_slash or entry_rel_path == norm_path_without_slash:
+                        continue
+                    
+                    is_direct_child = False
+                    
+                    if is_root:
+                        # ルート検索時は最上位レベルのエントリを返す
+                        # rel_pathが空またはスラッシュを含まない場合は直接の子
+                        is_direct_child = not entry_rel_path or '/' not in entry_rel_path
+                        
+                        # ルートがアーカイブファイルの場合の特別処理
+                        if self.current_path and os.path.isfile(self.current_path) and self._is_archive_by_extension(self.current_path):
+                            # アーカイブのルートディレクトリ内のトップレベルエントリのみを対象とする
+                            archive_root_prefix = f"{self.current_path}/"
+                            
+                            # アーカイブルート内のエントリかチェック
+                            if entry_path.startswith(archive_root_prefix):
+                                # アーカイブルートからの相対パスを抽出
+                                rel_to_archive_root = entry_path[len(archive_root_prefix):]
+                                # トップレベルのエントリのみを対象とする
+                                is_direct_child = '/' not in rel_to_archive_root
                             else:
-                                # 直下のファイル
-                                if entry_path not in seen_paths:
-                                    seen_paths.add(entry_path)
-                                    result.append(entry)
+                                # アーカイブルート外のエントリは対象外
+                                is_direct_child = False
+                    else:
+                        # それ以外の場合は検索パスの直接の子か確認
+                        # 両方のパターン（スラッシュあり/なし）をチェック
+                        if entry_rel_path.startswith(search_path_with_slash):
+                            # search_path_with_slash で始まり、それ以降にスラッシュがない
+                            remaining = entry_rel_path[len(search_path_with_slash):]
+                            is_direct_child = '/' not in remaining
+                        elif entry_rel_path.startswith(search_path_without_slash + '/'):
+                            # search_path_without_slash/ で始まり、それ以降にスラッシュがない
+                            remaining = entry_rel_path[len(search_path_without_slash) + 1:]
+                            is_direct_child = '/' not in remaining
                     
-                    # 指定されたパスとエントリが完全に一致する場合
-                    elif entry_path == norm_path:
-                        if entry_path not in seen_paths:
-                            seen_paths.add(entry_path)
-                            result.append(entry)
+                    # 直接の子エントリかつ未追加の場合は結果に追加
+                    if is_direct_child and entry.path not in seen_paths:
+                        result.append(entry)
+                        seen_paths.add(entry.path)
+                        print(f"  発見: {entry.name} ({entry.path})")
             
             # 結果を返す
             if result:
                 print(f"EnhancedArchiveManager: キャッシュから {len(result)} エントリを取得しました")
-                return self._mark_archive_entries(result)
-                
-            print(f"EnhancedArchiveManager: キャッシュにマッチするエントリがありません。通常の方法で取得します")
-        
-        # キャッシュに存在しない場合は親クラスのメソッドを使用
-        print(f"EnhancedArchiveManager: 親クラスのlist_entriesを使用します")
-        try:
-            entries = super().list_entries(path)
+                return result
             
-            # 得られた結果をキャッシュに追加
-            if entries:
-                print(f"EnhancedArchiveManager: 親クラスから取得した {len(entries)} エントリをキャッシュに追加します")
-                self._all_entries[norm_path] = entries
-                
-            return entries
-        except Exception as e:
-            # エラーを適切な例外に変換
-            if isinstance(e, (FileNotFoundError, PermissionError, ValueError)):
-                # すでに適切な例外タイプならそのまま再raise
-                raise
-            else:
-                # その他のエラーはI/O操作エラーとして扱う
-                error_message = f"エントリリストの取得に失敗しました: {path} - {str(e)}"
-                print(f"EnhancedArchiveManager: {error_message}")
-                raise IOError(error_message) from e
+            # キャッシュに存在しない場合、このパスは無効である可能性が高い
+            print(f"EnhancedArchiveManager: キャッシュにマッチするエントリがありません。パス '{path}' は無効かアクセス不能です。")
+            raise FileNotFoundError(f"指定されたパス '{path}' にエントリが見つかりません")
+            
+        # キャッシュが空（初回アクセスなど）の場合は例外
+        raise FileNotFoundError(f"エントリキャッシュが初期化されていません。set_current_pathを先に呼び出してください。")
     
+    def _is_direct_child(self, parent_path: str, child_path: str) -> bool:
+        """
+        child_pathがparent_pathの直下の子かどうか判定
+        
+        Args:
+            parent_path: 親ディレクトリパス
+            child_path: 子エントリパス
+            
+        Returns:
+            直下の子エントリならTrue、そうでなければFalse
+        """
+        # パスを正規化
+        parent = parent_path.rstrip('/')
+        child = child_path.rstrip('/')
+        
+        # 空の親パス（ルート）の場合は特別処理
+        if not parent:
+            # ルートの直下の子かどうかを判定（スラッシュが1つだけ）
+            return child.count('/') == 0
+        
+        # 親パスで始まるか確認
+        if not child.startswith(parent):
+            return False
+            
+        # 親の後に'/'があるか確認（親と子が同一の場合を除外）
+        if len(child) <= len(parent):
+            return False
+            
+        if child[len(parent)] != '/':
+            return False
+            
+        # 親の後の部分でスラッシュが1つだけかを確認
+        remaining = child[len(parent) + 1:]
+        return '/' not in remaining
+
     def _is_parent_dir(self, parent_path: str, child_path: str) -> bool:
         """
         parent_pathがchild_pathの親ディレクトリかどうかを判定
@@ -493,6 +622,10 @@ class EnhancedArchiveManager(ArchiveManager):
         """
         パスを解析し、アーカイブパスと内部パスに分割する
         
+        パスを末尾からファイル自体を除き、段階的に削りながらハンドラを検索し、
+        can_archive()がTrueのハンドラが処理できるパスをアーカイブパス、
+        元のパスのそれ以降の部分を内部パスとして返す
+        
         Args:
             path: 分割するパス
             
@@ -501,41 +634,63 @@ class EnhancedArchiveManager(ArchiveManager):
         """
         # 正規化したパス
         norm_path = path.replace('\\', '/')
+        print(f"EnhancedArchiveManager: パスを解析: {norm_path}")
         
-        # パスコンポーネントごとに分解
+        # パスをコンポーネントに分解
         parts = norm_path.split('/')
         
-        # ドライブレターがある場合の特別処理 (例: Z:/)
-        if len(parts) > 0 and ':' in parts[0]:
-            # ネットワークドライブのパスはアーカイブパスとして扱わない
-            if not os.path.exists(norm_path):
-                return "", ""
+        # ファイル自体を除いたパスから始める
+        if len(parts) > 1:
+            # 最後の要素を除いたパス
+            test_path = '/'.join(parts[:-1])
+            # 最後の要素（内部パスの先頭部分）
+            remaining = parts[-1]
+        else:
+            # パスが単一要素の場合
+            test_path = ""  # 空文字から始める
+            remaining = norm_path  # 全体が内部パスになる可能性
         
-        # パスを順に構築し、物理ファイルとしてのアーカイブを検出
-        test_path = ""
-        for i, part in enumerate(parts):
-            if i > 0:
-                test_path += "/"
-            test_path += part
+        # パスを段階的に削りながらアーカイブを検索
+        while test_path:
+            # 絶対パスに変換
+            abs_test_path = test_path
+            if not os.path.isabs(test_path) and self.current_path:
+                abs_test_path = os.path.join(self.current_path, test_path).replace('\\', '/')
             
-            # 現在のパスが物理ファイルとして存在するか確認
-            if os.path.isfile(test_path):
-                # アーカイブファイルかどうか判定（拡張子と実際のファイル存在確認）
-                _, ext = os.path.splitext(test_path.lower())
-                if ext in self._archive_extensions:
-                    # アーカイブファイル発見
-                    # 残りのコンポーネントが内部パス
-                    internal_path = '/'.join(parts[i+1:])
-                    return test_path, internal_path
+            # ハンドラを取得
+            handler = self.get_handler(abs_test_path)
+            
+            # ハンドラがcan_archive()を実装し、かつTrueを返すかチェック
+            if handler and handler.can_archive():
+                # アーカイブハンドラが見つかった場合
+                print(f"EnhancedArchiveManager: アーカイブパス特定: {abs_test_path}, 内部パス: {remaining}")
+                return abs_test_path, remaining
+            
+            # パスをさらに削る（次の階層へ）
+            if '/' in test_path:
+                last_slash = test_path.rindex('/')
+                # 残りのパスを内部パスとして蓄積
+                next_part = test_path[last_slash+1:]
+                remaining = next_part + '/' + remaining if next_part else remaining
+                # テストパスを短くする
+                test_path = test_path[:last_slash]
+            else:
+                # 最後の要素
+                if test_path:
+                    remaining = test_path + '/' + remaining
+                test_path = ""  # これ以上削れない
         
-        # 物理ファイルが見つからなかった場合は、親アーカイブを探す
-        if self.current_path and os.path.isfile(self.current_path):
-            # current_path が設定されていて、それが物理ファイルの場合
-            # このパスはcurrent_path内のパスとして扱う
-            return self.current_path, path
-                
-        # アーカイブファイルが見つからなかった
-        return "", ""
+        # ここに到達する場合、アーカイブパス候補がなかった
+        # 最終手段として、ルートがアーカイブファイルかどうかをチェック
+        if self.current_path and os.path.isfile(self.current_path) and self._is_archive_by_extension(self.current_path):
+            # ルートがアーカイブファイルの場合、current_pathをアーカイブパスとして、
+            # 元のパス全体を内部パスとして返す
+            print(f"EnhancedArchiveManager: ルートアーカイブを使用: {self.current_path}, 内部パス: {norm_path}")
+            return self.current_path, norm_path
+        
+        # ルートもアーカイブでない場合は空のアーカイブパスと残りの全部を返す
+        print(f"EnhancedArchiveManager: アーカイブパスが特定できませんでした: {norm_path}")
+        return "", remaining
     
     def _find_handler_for_extension(self, ext: str) -> Optional[ArchiveHandler]:
         """
@@ -602,38 +757,58 @@ class EnhancedArchiveManager(ArchiveManager):
             print(f"EnhancedArchiveManager: アーカイブ処理: {archive_path}")
             print(f"EnhancedArchiveManager: アーカイブエントリ ({arc_entry.path} )")
 
+            # 書庫エントリの種別を確実にARCHIVEに設定
+            # これが重要です - 物理ファイルであれ何であれ、この時点で処理されるエントリは書庫なので
+            if arc_entry.type != EntryType.ARCHIVE:
+                print(f"EnhancedArchiveManager: エントリタイプをARCHIVEに修正: {arc_entry.path}")
+                arc_entry.type = EntryType.ARCHIVE
+
+            # 処理対象が物理ファイルであれば、適切な処理を行う
+            if os.path.isfile(archive_path):
+                print(f"EnhancedArchiveManager: 物理ファイルを処理: {archive_path}")
+                handler = self.get_handler(archive_path)
+                if handler:
+                    try:
+                        # アーカイブ内のすべてのエントリ情報を取得するには list_all_entries を使用
+                        entries = handler.list_all_entries(archive_path)
+                        if entries:
+                            # 結果を返す前にEntryTypeをマーク
+                            marked_entries = self._mark_archive_entries(entries)
+                            print(f"EnhancedArchiveManager: 物理アーカイブから {len(marked_entries)} エントリを取得")
+                            return marked_entries
+                        else:
+                            print(f"EnhancedArchiveManager: ハンドラはエントリを返しませんでした: {handler.__class__.__name__}")
+                    except Exception as e:
+                        print(f"EnhancedArchiveManager: ハンドラの呼び出しでエラー: {e}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print(f"EnhancedArchiveManager: ファイルを処理するハンドラが見つかりません: {archive_path}")
+                
+                # エラーまたは結果が空の場合は空リストを返す
+                return []
+
             # 1. 親書庫のタイプと場所を判別
             parent_archive_path = None
             parent_archive_bytes = None
             parent_archive_temp_path = None
             
-            # 親書庫がルート書庫かネスト書庫かを判定
+            # パスを詳細に分析して親書庫と内部パスを特定
             parent_path, internal_path = self._analyze_path(archive_path)
             
             # パスを詳細に分析して親書庫と内部パスを特定
             if parent_path:
-                # 親書庫が物理ファイルとして存在することを確認
-                if os.path.isfile(parent_path):
-                    # ルート書庫との関連性をチェック
-                    if parent_path == self.current_path:
-                        # カレントパスと同じ場合は1重ネスト（ルート直下）
-                        parent_archive_path = parent_path
-                        print(f"EnhancedArchiveManager: 1重ネスト書庫 - 親書庫はカレントパスと同じ: {parent_archive_path}")
-                    else:
-                        # その他の物理ファイル
-                        parent_archive_path = parent_path
-                        print(f"EnhancedArchiveManager: 1重ネスト書庫 - 親書庫: {parent_archive_path}")
-                else:
-                    print(f"EnhancedArchiveManager: 親書庫のパス {parent_path} は物理ファイルとして存在しません")
-                    return []
+                parent_archive_path = parent_path
+                print(f"EnhancedArchiveManager: 親書庫を検出: {parent_archive_path}, 内部パス: {internal_path}")
             else:
-                # 書庫としての情報が不明な場合
-                print(f"EnhancedArchiveManager: 処理対象書庫のパス解析に失敗: {archive_path}")
+                print(f"EnhancedArchiveManager: 親書庫が見つかりません: {archive_path}")
                 return []
             
             # 絶対パスの確保
             if parent_archive_path and self.current_path and not os.path.isabs(parent_archive_path):
-                parent_archive_path = os.path.join(self.current_path, parent_archive_path).replace('\\', '/')
+                abs_path = os.path.join(self.current_path, parent_archive_path).replace('\\', '/')
+                print(f"EnhancedArchiveManager: 相対パスを絶対パスに変換: {parent_archive_path} -> {abs_path}")
+                parent_archive_path = abs_path
             
             # 2. 親書庫のハンドラを取得
             parent_handler = self.get_handler(parent_archive_path)
@@ -772,6 +947,42 @@ class EnhancedArchiveManager(ArchiveManager):
             # 再帰レベルを減少
             self._current_nest_level -= 1
 
+    def _get_handler_type(self, path: str) -> Optional[str]:
+        """
+        指定されたパスを処理できるハンドラの型名を取得する
+        
+        Args:
+            path: 処理対象のパス
+            
+        Returns:
+            ハンドラの型名。対応するものがなければNone
+        """
+        handler = self.get_handler(path)
+        if handler:
+            return handler.__class__.__name__
+        return None
+
+    def _find_archive_handler(self, path: str) -> Optional[ArchiveHandler]:
+        """
+        指定されたアーカイブに対応する専用のハンドラを探す
+        
+        Args:
+            path: アーカイブファイルのパス
+            
+        Returns:
+            アーカイブ対応のハンドラ。見つからなければNone
+        """
+        # ファイル拡張子を取得
+        _, ext = os.path.splitext(path.lower())
+        
+        # 拡張子に対応するハンドラを探す
+        for handler in self.handlers:
+            if ext in handler.supported_extensions and handler.__class__.__name__ != 'FileSystemHandler':
+                handler.set_current_path(self.current_path)
+                return handler
+        
+        return None
+
     def read_file(self, path: str) -> Optional[bytes]:
         """
         指定されたパスのファイルの内容を読み込む
@@ -781,32 +992,177 @@ class EnhancedArchiveManager(ArchiveManager):
             
         Returns:
             ファイルの内容。読み込みに失敗した場合はNone
+            
+        Raises:
+            FileNotFoundError: 指定されたパスが存在しない場合
         """
         # パスの正規化（先頭のスラッシュを削除）
         if path.startswith('/'):
             path = path[1:]
             print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
         
-        # まずキャッシュ済みの全エントリから検索
-        content = self._read_from_cached_entries(path)
-        if content is not None:
-            return content
+        # パスからアーカイブと内部パス、キャッシュされたバイトデータを導き出す
+        print(f"EnhancedArchiveManager: アーカイブパス解析: {path}")
+        result = self._resolve_file_source(path)
+        archive_path, internal_path, cached_bytes = result
+        print(f"EnhancedArchiveManager: ファイル読み込み: {path} -> {archive_path} -> {internal_path}")         
+        # アーカイブパスと内部パスがある場合
+        if archive_path and internal_path:
+            print(f"EnhancedArchiveManager: アーカイブ内のファイルを読み込み: {archive_path} -> {internal_path}")
+            handler = self.get_handler(archive_path)
+            if (handler):
+                # キャッシュされたバイトデータがある場合は、read_file_from_bytesを使用
+                if cached_bytes is not None:
+                    print(f"EnhancedArchiveManager: キャッシュされた書庫データから内部ファイルを抽出: {internal_path}")
+                    content = handler.read_file_from_bytes(cached_bytes, internal_path)
+                    if content is None:
+                        raise FileNotFoundError(f"指定されたファイルはアーカイブ内に存在しません: {path}")
+                    return content
+                else:
+                    # 通常のファイル読み込み
+                    content = handler.read_archive_file(archive_path, internal_path)
+                    if content is None:
+                        raise FileNotFoundError(f"指定されたファイルはアーカイブ内に存在しません: {path}")
+                    return content
         
-        # ハンドラを取得
-        handler = self.get_handler(path)
-        if not handler:
-            return None
+        # キャッシュされたバイトデータがある場合は、そのまま返す
+        # (内部パスがない場合やハンドラがread_file_from_bytesをサポートしていない場合)
+        if cached_bytes is not None:
+            print(f"EnhancedArchiveManager: キャッシュからファイルを読み込み: {path}")
+            return cached_bytes
         
-        # ハンドラが絶対パスを使用する場合は、current_pathを基準にした絶対パスを渡す
-        use_path = path
-        if handler.use_absolute() and self.current_path:
-            if not os.path.isabs(path):
-                use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                print(f"EnhancedArchiveManager: 絶対パスを使用: {path} -> {use_path}")
+        # 該当するファイルが見つからない場合はエラー
+        raise FileNotFoundError(f"指定されたファイルは存在しません: {path}")
+
+    def _resolve_file_source(self, path: str) -> Tuple[str, str, Optional[bytes]]:
+        """
+        パスからアーカイブパス、内部パス、キャッシュされたバイトデータを導き出す
         
-        # キャッシュになければ通常の方法で読み込み
-        return handler.read_file(use_path)
-    
+        Args:
+            path: 処理対象のパス
+            
+        Returns:
+            (アーカイブパス, 内部パス, キャッシュされたバイト) のタプル
+            - アーカイブが見つからない場合は ("", "", None)
+            - バイトデータが直接キャッシュされている場合は (仮想パス, internal_path, bytes)
+            - 一時ファイルでキャッシュされている場合は (cache_path, internal_path, None)
+            - 通常のアーカイブ内ファイルの場合は (archive_path, internal_path, None)
+        """
+        # パスを正規化
+        norm_path = path.replace('\\', '/')
+        print(f"EnhancedArchiveManager: ファイルソース解決: {norm_path}")
+        
+        # 1. まずエントリキャッシュから完全一致するエントリを検索
+        entry_found = False
+        entry_info = None
+        for cache_path, entries in self._all_entries.items():
+            for entry in entries:
+                if entry.rel_path.rstrip('/') == norm_path.rstrip('/'):
+                    print(f"EnhancedArchiveManager: キャッシュされたエントリを発見: {entry.path}")
+                    entry_found = True
+                    entry_info = entry
+                    break
+            if entry_found:
+                break
+        
+        # エントリが見つからない場合は早期リターン
+        if not entry_found:
+            print(f"EnhancedArchiveManager: 指定されたパス {norm_path} に対応するエントリが見つかりません")
+            return "", "", None
+        
+        # 2. パスコンポーネントを解析してアーカイブを特定
+        archive_path = ""
+        internal_path = entry_info.name_in_arc  # name_in_arcは必ず存在する前提
+        print(f"EnhancedArchiveManager: name_in_arcを内部パスとして使用: {internal_path}")
+        
+        # パスをコンポーネントに分解
+        parts = norm_path.split('/')
+        
+        # ファイル自体を除いたパスから始める
+        if len(parts) > 1:
+            # 最後の要素を除いたパス
+            test_path = '/'.join(parts[:-1])
+            # 最後の要素（内部パスの先頭部分）
+            remaining = parts[-1]
+        else:
+            # パスが単一要素の場合
+            test_path = ""  # 空文字から始める
+            remaining = norm_path  # 全体が内部パスになる可能性
+        
+        # パスを段階的に削りながらアーカイブを検索
+        while test_path:
+            # アーカイブかどうか確認
+            is_archive = False
+            test_entry_info = self.get_entry_info(test_path)
+            if test_entry_info and test_entry_info.type == EntryType.ARCHIVE:
+                is_archive = True
+            elif os.path.isfile(test_path):
+                _, ext = os.path.splitext(test_path.lower())
+                if ext in self._archive_extensions:
+                    is_archive = True
+            
+            if is_archive:
+                archive_path = test_path
+                print(f"EnhancedArchiveManager: アーカイブ {archive_path} を特定")
+                
+                # アーカイブエントリがキャッシュを持っているか確認
+                if test_entry_info and hasattr(test_entry_info, 'cache') and test_entry_info.cache is not None:
+                    cache = test_entry_info.cache
+                    if isinstance(cache, bytes):
+                        print(f"EnhancedArchiveManager: アーカイブエントリからキャッシュされたバイトデータを返します: {len(cache)} バイト")
+                        return test_entry_info.path, internal_path, cache
+                    elif isinstance(cache, str) and os.path.exists(cache):
+                        print(f"EnhancedArchiveManager: アーカイブエントリからキャッシュされた一時ファイルを返します: {cache}")
+                        return cache, internal_path, None
+                
+                break
+            
+            # パスをさらに削る（次の階層へ）
+            if '/' in test_path:
+                last_slash = test_path.rindex('/')
+                # 残りのパスを内部パスとして蓄積
+                next_part = test_path[last_slash+1:]
+                remaining = next_part + '/' + remaining if next_part else remaining
+                # テストパスを短くする
+                test_path = test_path[:last_slash]
+            else:
+                # 最後の要素
+                if test_path:
+                    remaining = test_path + '/' + remaining
+                test_path = ""  # これ以上削れない
+        
+        # アーカイブパスが特定できた場合
+        if archive_path:
+            # 相対パスを絶対パスに変換
+            if not os.path.isabs(archive_path) and self.current_path:
+                archive_path = os.path.join(self.current_path, archive_path).replace('\\', '/')
+                print(f"EnhancedArchiveManager: アーカイブパスを絶対パスに変換: {archive_path}")
+            
+            return archive_path, internal_path, None
+        
+        # ここに到達する場合、アーカイブパス候補がなかった
+        # 最終手段として、ルートがアーカイブファイルかどうかをチェック
+        if self.current_path and os.path.isfile(self.current_path) and self._is_archive_by_extension(self.current_path):
+            print(f"EnhancedArchiveManager: ルートアーカイブを使用: {self.current_path}")
+            archive_path = self.current_path
+            
+            # キャッシュされたアーカイブエントリを探す
+            arc_entry = self._find_archive_entry_in_cache(archive_path)
+            if arc_entry and hasattr(arc_entry, 'cache') and arc_entry.cache is not None:
+                cache = arc_entry.cache
+                if isinstance(cache, bytes):
+                    print(f"EnhancedArchiveManager: アーカイブのバイトデータキャッシュを返します")
+                    return arc_entry.path, internal_path, cache
+                elif isinstance(cache, str) and os.path.exists(cache):
+                    print(f"EnhancedArchiveManager: アーカイブの一時ファイルパスを返します: {cache}")
+                    return cache, internal_path, None
+            
+            print(f"EnhancedArchiveManager: アーカイブ内ファイルアクセス: {archive_path} -> {internal_path}")
+            return archive_path, internal_path, None
+        
+        print(f"EnhancedArchiveManager: アーカイブパスの特定に失敗しました")
+        return "", "", None
+
     def _read_from_cached_entries(self, path: str) -> Optional[bytes]:
         """
         キャッシュされたエントリからファイルを読み込む
@@ -992,6 +1348,15 @@ class EnhancedArchiveManager(ArchiveManager):
                     return entry
         
         return None
+        
+    def get_entry_cache(self) -> Dict[str, List[EntryInfo]]:
+        """
+        現在のエントリキャッシュを取得する
+        
+        Returns:
+            パスをキーとし、対応するエントリのリストを値とする辞書
+        """
+        return self._all_entries.copy()
 
     def set_current_path(self, path: str) -> None:
         """
@@ -1004,7 +1369,21 @@ class EnhancedArchiveManager(ArchiveManager):
         """
         # パスを正規化
         normalized_path = path.replace('\\', '/')
-        self.current_path = normalized_path
+        
+        # 物理ファイルかフォルダかを判定
+        if os.path.exists(path):
+            # 物理パスの場合は絶対パスに変換
+            abs_path = os.path.abspath(path)
+            normalized_path = abs_path.replace('\\', '/')
+            print(f"EnhancedArchiveManager: 物理パスを絶対パスに変換: {path} -> {normalized_path}")
+            
+            # フォルダの場合、末尾にスラッシュがあることを確認
+            if os.path.isdir(path) and not normalized_path.endswith('/'):
+                normalized_path += '/'
+                print(f"EnhancedArchiveManager: フォルダパスの末尾にスラッシュを追加: {normalized_path}")
+        
+        # まず基底クラスのset_current_pathを呼び出して全ハンドラーに通知
+        super().set_current_path(normalized_path)
         print(f"EnhancedArchiveManager: 現在のパスを設定: {normalized_path}")
         
         # まず最初にルートエントリをキャッシュに追加
@@ -1033,50 +1412,146 @@ class EnhancedArchiveManager(ArchiveManager):
         if path in self._all_entries:
             print(f"EnhancedArchiveManager: ルートエントリはキャッシュに既に存在します: {path}")
             return
+        
+        # カレントパスが物理フォルダかアーカイブファイルかを判断して処理を分ける
+        if os.path.isdir(path):
+            # 物理フォルダの場合の処理
+            print(f"EnhancedArchiveManager: 物理フォルダのルートエントリを作成: {path}")
             
-        # ルートエントリ情報を取得
-        root_info = self.get_entry_info(path)
-        if root_info:
-            # ルート用のエントリリストを作成（ルートエントリ自身を含む）
-            root_entries = [root_info]
+            # フォルダのEntryInfoを作成
+            # ディレクトリ名を正しく取得 (パスの末尾スラッシュを考慮)
+            folder_name = os.path.basename(path.rstrip('/'))
+            if not folder_name and path:
+                # ルートディレクトリの場合（例：C:/ や Z:/）
+                # ドライブレターや完全パスをそのまま名前として使用
+                if ':' in path:
+                    # Windowsのドライブレターの場合
+                    drive_parts = path.split(':')
+                    if len(drive_parts) > 0:
+                        folder_name = drive_parts[0] + ":"
+                else:
+                    folder_name = path
             
-            # キャッシュに追加
-            print(f"EnhancedArchiveManager: ルートエントリをキャッシュに追加: {path}")
-            self._all_entries[path] = root_entries
+            print(f"EnhancedArchiveManager: フォルダ名: '{folder_name}'")
             
-            # アーカイブの場合、アーカイブ内のルートディレクトリコンテンツを作成・追加
-            if root_info.type == EntryType.ARCHIVE:
-                # アーカイブ内のルートコンテンツを取得
-                try:
-                    # ハンドラを取得
-                    handler = self.get_handler(path)
-                    if handler:
-                        # アーカイブ内のルートディレクトリパスを構築
-                        archive_root = f"{path}/"
-                        
-                        # ハンドラから直接エントリリストを取得
-                        direct_children = handler.list_entries(path)
-                        if direct_children:
-                            print(f"EnhancedArchiveManager: アーカイブのルートディレクトリをキャッシュに追加: {archive_root}")
-                            # エントリをマークしてアーカイブを識別
-                            direct_children = self._mark_archive_entries(direct_children)
-                            self._all_entries[archive_root] = direct_children
-                        else:
-                            print(f"EnhancedArchiveManager: アーカイブからエントリを取得できませんでした: {path}")
-                except Exception as e:
-                    print(f"EnhancedArchiveManager: アーカイブのルートディレクトリ作成中にエラー: {e}")
-                    import traceback
-                    traceback.print_exc()
-
-    def __del__(self):
-        """デストラクタ - 一時ファイルのクリーンアップ"""
-        for temp_file in self._temp_files:
-            if os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except:
-                    pass
-
+            # フォルダのEntryInfoを作成
+            root_info = EntryInfo(
+                name=folder_name,
+                path=path,
+                type=EntryType.DIRECTORY,
+                size=0,
+                modified_time=None
+            )
+            
+            # フォルダのエントリリストをキャッシュに追加
+            self._all_entries[path] = [root_info]
+            
+            # 物理フォルダの内容をキャッシュに追加
+            try:
+                # フォルダの内容を取得
+                folder_contents = []
+                
+                for item in os.listdir(path):
+                    item_path = os.path.join(path, item).replace('\\', '/')
+                    
+                    if os.path.isdir(item_path):
+                        # フォルダ
+                        if not item_path.endswith('/'):
+                            item_path += '/'
+                            
+                        entry = EntryInfo(
+                            name=item,
+                            path=item_path,
+                            type=EntryType.DIRECTORY,
+                            size=0,
+                            modified_time=None
+                        )
+                        folder_contents.append(entry)
+                    else:
+                        # ファイル
+                        try:
+                            size = os.path.getsize(item_path)
+                            mtime = os.path.getmtime(item_path)
+                            import datetime
+                            modified_time = datetime.datetime.fromtimestamp(mtime)
+                            
+                            # アーカイブかどうか判定
+                            file_type = EntryType.FILE
+                            _, ext = os.path.splitext(item_path.lower())
+                            if ext in self._archive_extensions:
+                                file_type = EntryType.ARCHIVE
+                                
+                            entry = EntryInfo(
+                                name=item,
+                                path=item_path,
+                                type=file_type,
+                                size=size,
+                                modified_time=modified_time
+                            )
+                            folder_contents.append(entry)
+                        except Exception as e:
+                            print(f"EnhancedArchiveManager: ファイル情報取得エラー: {item_path} - {e}")
+                
+                # フォルダのコンテンツをキャッシュに追加
+                print(f"EnhancedArchiveManager: フォルダ内容をキャッシュに追加: {path} ({len(folder_contents)} アイテム)")
+                
+                # 物理フォルダの場合は、そのパスと空パスの両方にコンテンツをキャッシュ
+                self._all_entries[path] = folder_contents
+                # 空パスにもキャッシュして、list_entriesで空のパスが渡された時に正しく動作するようにする
+                self._all_entries[''] = folder_contents
+                print(f"EnhancedArchiveManager: 空パスにもフォルダ内容をキャッシュしました")
+                
+            except Exception as e:
+                print(f"EnhancedArchiveManager: フォルダ内容の取得エラー: {path} - {e}")
+            
+        elif os.path.isfile(path):
+            # アーカイブファイルの場合の処理
+            print(f"EnhancedArchiveManager: アーカイブファイルのルートエントリを作成: {path}")
+            
+            # ルートエントリ情報を取得
+            root_info = self.get_entry_info(path)
+            if root_info:
+                # ファイルタイプがアーカイブかどうか確認して修正
+                if root_info.type == EntryType.FILE and self._is_archive_by_extension(root_info.name):
+                    root_info.type = EntryType.ARCHIVE
+                    
+                # ルート用のエントリリストを作成（ルートエントリ自身を含む）
+                root_entries = [root_info]
+                
+                # キャッシュに追加
+                print(f"EnhancedArchiveManager: ルートエントリをキャッシュに追加: {path}")
+                self._all_entries[path] = root_entries
+                
+                # アーカイブの場合、アーカイブ内のルートディレクトリコンテンツを作成・追加
+                if root_info.type == EntryType.ARCHIVE:
+                    # アーカイブ内のルートコンテンツを取得
+                    try:
+                        # ハンドラを取得
+                        handler = self.get_handler(path)
+                        if handler:
+                            # アーカイブ内のルートディレクトリパスを構築
+                            archive_root = f"{path}/"
+                            
+                            # ハンドラから直接エントリリストを取得
+                            direct_children = handler.list_entries(path)
+                            if direct_children:
+                                print(f"EnhancedArchiveManager: アーカイブのルートディレクトリをキャッシュに追加: {archive_root}")
+                                # エントリをマークしてアーカイブを識別
+                                direct_children = self._mark_archive_entries(direct_children)
+                                self._all_entries[archive_root] = direct_children
+                                # アーカイブファイルの場合も空パスにキャッシュ
+                                self._all_entries[''] = direct_children
+                                print(f"EnhancedArchiveManager: 空パスにもアーカイブ内容をキャッシュしました")
+                            else:
+                                print(f"EnhancedArchiveManager: アーカイブからエントリを取得できませんでした: {path}")
+                    except Exception as e:
+                        print(f"EnhancedArchiveManager: アーカイブのルートディレクトリ作成中にエラー: {e}")
+                        import traceback
+                        traceback.print_exc()
+        else:
+            # 物理ファイルとして存在しないパスの場合
+            print(f"EnhancedArchiveManager: パス '{path}' は物理ファイルとして存在しません")
+    
     def list_all_entries(self, path: str, recursive: bool = True) -> List[EntryInfo]:
         """
         指定されたパスの配下にあるすべてのエントリを再帰的に取得する
@@ -1101,7 +1576,7 @@ class EnhancedArchiveManager(ArchiveManager):
         
         try:
             # 1. 最初にルートパス自身のエントリ情報を取得
-            root_entry_info = self.get_entry_info(path)
+            root_entry_info = self.get_raw_entry_info(path)
             
             # 2. ハンドラを取得（ファイル種別に合わせて適切なハンドラ）
             handler = self.get_handler(path)
@@ -1114,16 +1589,8 @@ class EnhancedArchiveManager(ArchiveManager):
             
             print(f"EnhancedArchiveManager: '{handler.__class__.__name__}' を使用して再帰的にエントリを探索します")
             
-            # 3. 最初のレベルのエントリリストを取得 (ここがRARハンドラなどを使用する部分)
-            # ハンドラが絶対パスを要求する場合は絶対パスを構築
-            use_path = path
-            if handler.use_absolute() and self.current_path:
-                if not os.path.isabs(path):
-                    use_path = os.path.join(self.current_path, path).replace('\\', '/')
-                    print(f"EnhancedArchiveManager: 絶対パスを使用: {path} -> {use_path}")
-            
-            # ハンドラの list_entries でルート直下のエントリを取得
-            base_entries = handler.list_entries(use_path)
+            # 3. 最初のレベルのエントリリストを取得
+            base_entries = handler.list_all_entries(path)
             if not base_entries:
                 print(f"EnhancedArchiveManager: エントリが見つかりませんでした: {path}")
                 # エントリが取得できなくても、ルートエントリ自体は返す
@@ -1204,6 +1671,63 @@ class EnhancedArchiveManager(ArchiveManager):
             if 'root_entry_info' in locals() and root_entry_info:
                 return [root_entry_info]
             return []
+
+    def get_raw_entry_info(self, path: str) -> Optional[EntryInfo]:
+        """
+        指定されたパスのエントリ情報をハンドラ経由で取得する
+        原則としてエントリキャッシュ初期化時だけ使用される
+        初期化後はキャッシュからのみエントリを取得する
+        Args:
+            path: 情報を取得するエントリのパス
+            
+        Returns:
+            エントリ情報。存在しない場合はNone
+        """
+        handler = self.get_handler(path)
+        if handler is None:
+            return None
+        
+        return handler.get_entry_info(path)
+
+    def get_entry_info(self, path: str) -> Optional[EntryInfo]:
+        """
+        指定されたパスのエントリ情報を取得する
+        
+        EnhancedArchiveManagerは前提としてすべてのエントリがキャッシュに存在するため、
+        キャッシュからのみエントリを検索する。キャッシュにないエントリは存在しないとみなす。
+        
+        Args:
+            path: 情報を取得するエントリのパス
+            
+        Returns:
+            エントリ情報。存在しない場合はNone
+        """
+        # パスの正規化（先頭のスラッシュを削除）
+        if path.startswith('/'):
+            path = path[1:]
+            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
+        
+        # パスを正規化
+        norm_path = path.replace('\\', '/')
+        
+        # キャッシュされたエントリリストから検索
+        if self._all_entries:
+            print(f"EnhancedArchiveManager: キャッシュからエントリ情報を検索: {norm_path}")
+            
+            # すべてのエントリリストを検索
+            for cache_path, entries in self._all_entries.items():
+                for entry in entries:
+                    # パスの比較（末尾のスラッシュを無視）
+                    if entry.rel_path.rstrip('/') == norm_path.rstrip('/'):
+                        print(f"EnhancedArchiveManager: キャッシュでエントリを発見: {entry.path}")
+                        return entry
+            
+            print(f"EnhancedArchiveManager: キャッシュにエントリが見つかりませんでした: {norm_path}")
+        else:
+            print(f"EnhancedArchiveManager: エントリキャッシュが初期化されていません")
+        
+        # キャッシュに見つからない場合はNoneを返す（フォールバックは行わない）
+        return None
 
 
 def get_archive_manager() -> ArchiveManager:
@@ -1416,3 +1940,20 @@ def get_parent_path(path: str) -> str:
         print(f"ArchiveManager: 先頭のスラッシュを削除しました: {path}")
     
     return get_archive_manager().get_parent_path(path)
+
+
+def get_entry_cache() -> Dict[str, List[EntryInfo]]:
+    """
+    現在のアーカイブマネージャーが保持しているエントリキャッシュを取得する
+    
+    Returns:
+        パスをキーとして、それに対応するEntryInfoのリストを値とする辞書
+    """
+    manager = get_archive_manager()
+    
+    # EnhancedArchiveManagerの場合のみキャッシュを取得
+    if isinstance(manager, EnhancedArchiveManager):
+        return manager.get_entry_cache()
+    
+    # 通常のArchiveManagerの場合は空の辞書を返す
+    return {}

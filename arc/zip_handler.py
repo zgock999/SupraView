@@ -165,11 +165,10 @@ class ZipHandler(ArchiveHandler):
         for dir_name in current_dir['dirs']:
             dir_path = os.path.join(original_path, dir_name).replace('\\', '/')
             
-            result_entries.append(EntryInfo(
+            # 相対パスを設定したEntryInfoを作成
+            result_entries.append(self.create_entry_info(
                 name=dir_name,
-                path=dir_path,
-                size=0,
-                modified_time=None,
+                abs_path=dir_path,
                 type=EntryType.DIRECTORY
             ))
         
@@ -217,30 +216,25 @@ class ZipHandler(ArchiveHandler):
                 _, ext = os.path.splitext(file_name.lower())
                 entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
                     
-                # ファイルエントリを作成
-                entry = EntryInfo(
+                # 相対パスを設定したファイルEntryInfoを作成
+                entry = self.create_entry_info(
                     name=file_name,
-                    path=file_path,
+                    abs_path=file_path,
+                    type=entry_type,
                     size=file_info.file_size,
                     modified_time=timestamp,
-                    type=entry_type,
                     name_in_arc=original_name
                 )
-                
-                # name_in_arcが設定されていないか確認
-                if not hasattr(entry, 'name_in_arc') or entry.name_in_arc is None:
-                    print(f"name_in_arcが渡されていません（デバッグ用）")
                 
                 result_entries.append(entry)
             except Exception as e:
                 # エラーが発生しても最低限の情報でエントリを追加
                 print(f"ZIPファイル情報取得エラー: {file_path_in_zip}, {str(e)}")
-                result_entries.append(EntryInfo(
+                result_entries.append(self.create_entry_info(
                     name=file_name,
-                    path=file_path,
-                    size=0,
-                    modified_time=None,
+                    abs_path=file_path,
                     type=EntryType.FILE,
+                    size=0,
                     name_in_arc=original_name  # これも渡しておく
                 ))
         
@@ -311,7 +305,7 @@ class ZipHandler(ArchiveHandler):
                                 # デコードしたファイル名が元と違うかつ制御文字が少ない場合は採用
                                 if decoded != original_name and not any(ord(c) < 32 for c in decoded):
                                     name = decoded
-                                    print(f"  エンコーディング変換({encoding}): {original_name} -> {name}")
+                                    #print(f"  エンコーディング変換({encoding}): {original_name} -> {name}")
                                     break
                             except UnicodeError:
                                 continue
@@ -329,7 +323,7 @@ class ZipHandler(ArchiveHandler):
                 is_dir = name.endswith('/')
                 
                 # デバッグ出力
-                print(f"  エントリ: {name} ({'ディレクトリ' if is_dir else 'ファイル'})")
+                #print(f"  エントリ: {name} ({'ディレクトリ' if is_dir else 'ファイル'})")
                 
                 # 既に処理済みのパスをスキップ
                 if name in structure:
@@ -471,9 +465,9 @@ class ZipHandler(ArchiveHandler):
             # ZIPファイル自体の情報を返す
             try:
                 file_stat = os.stat(zip_path)
-                return EntryInfo(
+                return self.create_entry_info(
                     name=os.path.basename(zip_path),
-                    path=zip_path,
+                    abs_path=zip_path,
                     size=file_stat.st_size,
                     modified_time=datetime.datetime.fromtimestamp(file_stat.st_mtime),
                     type=EntryType.ARCHIVE  # ZIPファイルはARCHIVEタイプ
@@ -1050,9 +1044,9 @@ class ZipHandler(ArchiveHandler):
                         dir_name = os.path.basename(name.rstrip('/'))
                         entry_path = f"{zip_path}/{name}"
                         
-                        all_entries.append(EntryInfo(
+                        all_entries.append(self.create_entry_info(
                             name=dir_name,
-                            path=entry_path,
+                            abs_path=entry_path,
                             size=0,
                             modified_time=None,
                             type=EntryType.DIRECTORY,
@@ -1075,9 +1069,9 @@ class ZipHandler(ArchiveHandler):
                         _, ext = os.path.splitext(file_name.lower())
                         entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
                             
-                        all_entries.append(EntryInfo(
+                        all_entries.append(self.create_entry_info(
                             name=file_name,
-                            path=file_path,
+                            abs_path=file_path,
                             size=info.file_size,
                             modified_time=timestamp,
                             type=entry_type,
@@ -1163,9 +1157,9 @@ class ZipHandler(ArchiveHandler):
                             dir_name = os.path.basename(name.rstrip('/'))
                             entry_path = f"{path}/{name}" if path else name
                             
-                            all_entries.append(EntryInfo(
+                            all_entries.append(self.create_entry_info(
                                 name=dir_name,
-                                path=entry_path,
+                                abs_path=entry_path,
                                 size=0,
                                 modified_time=None,
                                 type=EntryType.DIRECTORY,
@@ -1188,9 +1182,9 @@ class ZipHandler(ArchiveHandler):
                             _, ext = os.path.splitext(file_name.lower())
                             entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
                                 
-                            all_entries.append(EntryInfo(
+                            all_entries.append(self.create_entry_info(
                                 name=file_name,
-                                path=file_path,
+                                abs_path=file_path,
                                 size=info.file_size,
                                 modified_time=timestamp,
                                 type=entry_type,

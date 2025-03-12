@@ -197,13 +197,14 @@ class RarHandler(ArchiveHandler):
         if internal_path and not internal_path.endswith('/'):
             try:
                 file_info = rf.getinfo(internal_path)
-                # ファイルエントリを作成
-                entry = EntryInfo(
+                # 相対パスを設定したファイルエントリを作成
+                entry = self.create_entry_info(
                     name=os.path.basename(internal_path),
-                    path=internal_path,  # 相対パスを使用
+                    abs_path=internal_path,
                     size=file_info.file_size,
                     modified_time=datetime.datetime(*file_info.date_time),
-                    type=EntryType.FILE if not file_info.is_dir() else EntryType.DIRECTORY
+                    type=EntryType.FILE if not file_info.is_dir() else EntryType.DIRECTORY,
+                    name_in_arc=internal_path  # オリジナルの内部パスを設定
                 )
                 result.append(entry)
                 return result
@@ -240,24 +241,27 @@ class RarHandler(ArchiveHandler):
                     if dir_name and dir_name not in unique_dirs:
                         unique_dirs.add(dir_name)
                         dir_path = os.path.join(internal_path, dir_name).replace('\\', '/')
+                        dir_full_path = dir_path + '/'  # ディレクトリの場合は末尾にスラッシュを追加
                         
-                        # ディレクトリエントリを作成
-                        result.append(EntryInfo(
+                        # 相対パスを設定したディレクトリエントリを作成
+                        result.append(self.create_entry_info(
                             name=dir_name,
-                            path=dir_path,
+                            abs_path=dir_path,
                             size=0,
                             modified_time=None,
-                            type=EntryType.DIRECTORY
+                            type=EntryType.DIRECTORY,
+                            name_in_arc=dir_full_path  # 書庫内の相対パス
                         ))
                     continue
             
-            # エントリ情報を作成
-            entry = EntryInfo(
+            # 相対パスを設定したエントリ情報を作成
+            entry = self.create_entry_info(
                 name=os.path.basename(item_path),
-                path=item_path,  # 相対パスを使用
+                abs_path=item_path,
                 size=item.file_size,
                 modified_time=datetime.datetime(*item.date_time),
-                type=EntryType.FILE if not item.is_dir() else EntryType.DIRECTORY
+                type=EntryType.FILE if not item.is_dir() else EntryType.DIRECTORY,
+                name_in_arc=item_path  # 書庫内の相対パス
             )
             result.append(entry)
         
@@ -333,9 +337,9 @@ class RarHandler(ArchiveHandler):
             with rarfile.RarFile(archive_path) as rf:
                 try:
                     info = rf.getinfo(internal_path)
-                    return EntryInfo(
+                    return self.create_entry_info(
                         name=os.path.basename(internal_path),
-                        path=internal_path,  # 相対パスを使用
+                        abs_path=internal_path,
                         size=info.file_size,
                         modified_time=datetime.datetime(*info.date_time),
                         type=EntryType.FILE if not info.is_dir() else EntryType.DIRECTORY
@@ -348,9 +352,9 @@ class RarHandler(ArchiveHandler):
                     # そのディレクトリ内に何かファイルがあるか確認
                     for item in rf.infolist():
                         if item.filename.startswith(internal_path):
-                            return EntryInfo(
+                            return self.create_entry_info(
                                 name=os.path.basename(internal_path.rstrip('/')),
-                                path=internal_path,  # 相対パスを使用
+                                abs_path=internal_path,
                                 size=0,
                                 modified_time=None,
                                 type=EntryType.DIRECTORY
@@ -651,17 +655,18 @@ class RarHandler(ArchiveHandler):
             # ディレクトリかどうかの判定
             is_dir = info.isdir()
             
-            # ファイル情報からエントリ情報を作成
+            # 相対パスを設定したファイル情報からエントリ情報を作成
             if is_dir:
                 # ディレクトリの場合
                 dir_name = os.path.basename(item_path.rstrip('/'))
                 
-                all_entries.append(EntryInfo(
+                all_entries.append(self.create_entry_info(
                     name=dir_name,
-                    path=item_path,  # 相対パスを使用
+                    abs_path=item_path,
                     size=0,
                     modified_time=None,
-                    type=EntryType.DIRECTORY
+                    type=EntryType.DIRECTORY,
+                    name_in_arc=item_path  # 書庫内の相対パス
                 ))
             else:
                 # ファイルの場合
@@ -677,12 +682,13 @@ class RarHandler(ArchiveHandler):
                 _, ext = os.path.splitext(file_name.lower())
                 entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
                     
-                all_entries.append(EntryInfo(
+                all_entries.append(self.create_entry_info(
                     name=file_name,
-                    path=item_path,  # 相対パスを使用
+                    abs_path=item_path,
                     size=info.file_size,
                     modified_time=mod_time,
-                    type=entry_type
+                    type=entry_type,
+                    name_in_arc=item_path  # 書庫内の相対パス
                 ))
         
         return all_entries

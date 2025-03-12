@@ -7,6 +7,7 @@ ArchiveHandlerインタフェースを実装するハンドラ
 
 import os
 import stat
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, BinaryIO, Dict
@@ -39,6 +40,15 @@ class FileSystemHandler(ArchiveHandler):
         """
         return []
     
+    def set_archive_extensions(self, extensions: List[str]) -> None:
+        """
+        アーカイブファイル拡張子のリストを設定する
+        
+        Args:
+            extensions: アーカイブファイル拡張子のリスト
+        """
+        self.KNOWN_ARCHIVE_EXTENSIONS = extensions
+        
     def can_handle(self, path: str) -> bool:
         """
         指定されたパスを処理できるかどうかを判定する
@@ -49,12 +59,12 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             物理ファイルシステムのパスであればTrue
         """
-        # 正規化したパスを使用
-        norm_path = self.normalize_path(path)
+        # 絶対パスに変換
+        abs_path = self._to_absolute_path(path)
         
         try:
             # パスが物理的に存在するかチェック
-            return os.path.exists(norm_path)
+            return os.path.exists(abs_path)
         except (OSError, ValueError):
             return False
     
@@ -68,21 +78,45 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             EntryInfoオブジェクトのリスト
         """
-        norm_path = self.normalize_path(path)
+        abs_path = self._to_absolute_path(path)
         entries = []
         
         try:
+            # パスが存在するかチェック
+            if not os.path.exists(abs_path):
+                # 部分一致検索を試みる
+                fuzzy_entries = self._fuzzy_match_entries(abs_path)
+                if fuzzy_entries:
+                    print(f"FileSystemHandler: パスを部分一致で検索しました: {abs_path} -> {len(fuzzy_entries)} エントリ")
+                    return fuzzy_entries
+                
+                # 見つからなければ空のリストを返す
+                print(f"FileSystemHandler: パスが見つかりません: {abs_path}")
+                return []
+            
             # ディレクトリが存在するか確認
-            if not os.path.exists(norm_path) or not os.path.isdir(norm_path):
+            if not os.path.isdir(abs_path):
+                # ファイルの場合は、そのファイル自体の情報をリストとして返す
+                if os.path.isfile(abs_path):
+                    entry = self.get_entry_info(abs_path)
+                    if entry:
+                        # ZIPファイルの場合は確実にARCHIVEタイプにする
+                        if entry.type == EntryType.FILE:
+                            _, ext = os.path.splitext(abs_path.lower())
+                            if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
+                                entry.type = EntryType.ARCHIVE
+                                print(f"FileSystemHandler: ファイル {abs_path} をARCHIVEタイプに修正")
+                        return [entry]
+                    
                 return []
             
             # ディレクトリ内のエントリを列挙
-            with os.scandir(norm_path) as scanner:
+            with os.scandir(abs_path) as scanner:
                 for entry in scanner:
                     try:
                         # エントリの基本情報を取得
                         name = entry.name
-                        full_path = os.path.join(norm_path, name)
+                        full_path = os.path.join(abs_path, name)
                         
                         # ファイルタイプを判定
                         if entry.is_dir():
@@ -105,17 +139,16 @@ class FileSystemHandler(ArchiveHandler):
                         # 隠しファイルかどうかを判定（プラットフォーム依存）
                         is_hidden = name.startswith('.') if os.name != 'nt' else bool(stat_info.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN) if hasattr(stat_info, 'st_file_attributes') else False
                         
-                        # EntryInfoオブジェクトを作成
-                        entry_info = EntryInfo(
+                        # 絶対パスと相対パスの両方を設定したEntryInfoオブジェクトを作成
+                        entry_info = self.create_entry_info(
                             name=name,
-                            path=full_path,
+                            abs_path=full_path,
                             type=entry_type,
                             size=stat_info.st_size,
                             created_time=ctime,
                             modified_time=mtime,
                             is_hidden=is_hidden
                         )
-                        
                         entries.append(entry_info)
                     except (OSError, PermissionError) as e:
                         print(f"エントリの読み取りエラー: {entry.path}, {e}")
@@ -124,8 +157,105 @@ class FileSystemHandler(ArchiveHandler):
             return entries
             
         except (OSError, PermissionError) as e:
-            print(f"ディレクトリの読み取りエラー: {norm_path}, {e}")
+            print(f"ディレクトリの読み取りエラー: {abs_path}, {e}")
             return []
+    
+    def _fuzzy_match_entries(self, path: str) -> List[EntryInfo]:
+        """
+        パスを部分一致で検索し、一致するエントリを返す
+        
+        Args:
+            path: 部分一致検索するパス
+            
+        Returns:
+            一致したエントリのリスト
+        """
+        # パス部分とファイル名部分に分割
+        dir_path = os.path.dirname(path)
+        search_name = os.path.basename(path)
+        
+        if not search_name:
+            return []
+        
+        # 検索対象のディレクトリを特定
+        search_dir = dir_path or os.getcwd()
+        search_dir = search_dir.replace('\\', '/')
+        
+        # 存在確認
+        if not os.path.isdir(search_dir):
+            return []
+        
+        # 柔軟な部分一致検索（ワイルドカード対応）
+        results = []
+        try:
+            # 正規表現に変換（*.zip -> .*\.zip$）
+            if '*' in search_name or '?' in search_name:
+                pattern = search_name.replace('.', '\\.')
+                pattern = pattern.replace('*', '.*')
+                pattern = pattern.replace('?', '.')
+                pattern = f"^{pattern}$"
+                regex = re.compile(pattern, re.IGNORECASE)
+                
+                # ディレクトリ内のファイルをチェック
+                for item in os.listdir(search_dir):
+                    if regex.match(item):
+                        item_path = os.path.join(search_dir, item).replace('\\', '/')
+                        
+                        if os.path.isfile(item_path):
+                            # ファイル情報を取得
+                            size = os.path.getsize(item_path)
+                            mtime = os.path.getmtime(item_path)
+                            modified_time = datetime.fromtimestamp(mtime)
+                            
+                            # アーカイブファイルかどうかをチェック
+                            file_type = EntryType.FILE
+                            _, ext = os.path.splitext(item.lower())
+                            if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
+                                file_type = EntryType.ARCHIVE
+                            
+                            # create_entry_infoを使用してエントリを作成
+                            entry = self.create_entry_info(
+                                name=item,
+                                abs_path=item_path,
+                                type=file_type,
+                                size=size,
+                                modified_time=modified_time
+                            )
+                            results.append(entry)
+            else:
+                # 部分一致検索
+                search_name_lower = search_name.lower()
+                
+                for item in os.listdir(search_dir):
+                    if search_name_lower in item.lower():
+                        item_path = os.path.join(search_dir, item).replace('\\', '/')
+                        
+                        if os.path.isfile(item_path):
+                            # ファイル情報を取得
+                            size = os.path.getsize(item_path)
+                            mtime = os.path.getmtime(item_path)
+                            modified_time = datetime.fromtimestamp(mtime)
+                            
+                            # アーカイブファイルかどうかをチェック
+                            file_type = EntryType.FILE
+                            _, ext = os.path.splitext(item.lower())
+                            if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
+                                file_type = EntryType.ARCHIVE
+                            
+                            # create_entry_infoを使用してエントリを作成
+                            entry = self.create_entry_info(
+                                name=item,
+                                abs_path=item_path,
+                                type=file_type,
+                                size=size,
+                                modified_time=modified_time
+                            )
+                            results.append(entry)
+            
+        except Exception as e:
+            print(f"FileSystemHandler: 部分一致検索エラー: {e}")
+            
+        return results
     
     def get_entry_info(self, path: str) -> Optional[EntryInfo]:
         """
@@ -137,20 +267,20 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             エントリ情報。存在しない場合はNone
         """
-        norm_path = self.normalize_path(path)
+        abs_path = self._to_absolute_path(path)
         
         try:
             # パスが存在するか確認
-            if not os.path.exists(norm_path):
+            if not os.path.exists(abs_path):
                 return None
             
             # 基本情報を取得
-            name = os.path.basename(norm_path)
+            name = os.path.basename(abs_path)
             
             # ファイルタイプを判定
-            if os.path.isdir(norm_path):
+            if os.path.isdir(abs_path):
                 entry_type = EntryType.DIRECTORY
-            elif os.path.isfile(norm_path):
+            elif os.path.isfile(abs_path):
                 # 拡張子をチェックしてアーカイブかどうかを判定
                 _, ext = os.path.splitext(name.lower())
                 if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
@@ -162,7 +292,7 @@ class FileSystemHandler(ArchiveHandler):
                 entry_type = EntryType.UNKNOWN
             
             # ファイル属性を取得
-            stat_info = os.stat(norm_path)
+            stat_info = os.stat(abs_path)
             
             # タイムスタンプをDatetime型に変換
             ctime = datetime.fromtimestamp(stat_info.st_ctime)
@@ -171,10 +301,10 @@ class FileSystemHandler(ArchiveHandler):
             # 隠しファイルかどうかを判定（プラットフォーム依存）
             is_hidden = name.startswith('.') if os.name != 'nt' else bool(stat_info.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN) if hasattr(stat_info, 'st_file_attributes') else False
             
-            # EntryInfoオブジェクトを作成
-            return EntryInfo(
+            # 絶対パスと相対パスの両方を設定したEntryInfoオブジェクトを作成
+            return self.create_entry_info(
                 name=name,
-                path=norm_path,
+                abs_path=abs_path,
                 type=entry_type,
                 size=stat_info.st_size,
                 created_time=ctime,
@@ -183,32 +313,50 @@ class FileSystemHandler(ArchiveHandler):
             )
             
         except (OSError, PermissionError) as e:
-            print(f"エントリ情報取得エラー: {norm_path}, {e}")
+            print(f"エントリ情報取得エラー: {abs_path}, {e}")
             return None
     
-    def read_file(self, path: str) -> Optional[bytes]:
+    def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
         """
-        指定されたファイルの内容を読み込む
+        ファイルシステム上のファイルを読み込む
         
         Args:
-            path: 読み込むファイルのパス
+            archive_path: ファイルまたはディレクトリのパス
+            file_path: サブパス (空の場合はarchive_path自体を読み込む)
             
         Returns:
-            ファイルの内容（バイト配列）。読み込みに失敗した場合はNone
+            ファイルの内容。読み込みに失敗した場合はNone
         """
-        norm_path = self.normalize_path(path)
-        
         try:
+            # 両方のパスを正規化
+            norm_archive_path = self.normalize_path(archive_path)
+            norm_file_path = self.normalize_path(file_path) if file_path else ""
+            
+            if norm_file_path:
+                # サブパスが指定されている場合は結合
+                full_path = os.path.join(norm_archive_path, norm_file_path).replace('\\', '/')
+                print(f"FileSystemHandler: 結合パスからファイル読み込み: {full_path}")
+            else:
+                # サブパスが空の場合はarchive_path自体を読み込む
+                full_path = norm_archive_path
+                print(f"FileSystemHandler: 単一パスからファイル読み込み: {full_path}")
+            
+            # 絶対パスに変換
+            abs_path = self._to_absolute_path(full_path)
+            
             # ファイルが存在し、通常のファイルであるか確認
-            if not os.path.isfile(norm_path):
+            if not os.path.isfile(abs_path):
+                print(f"FileSystemHandler: パス {abs_path} はファイルではありません")
                 return None
             
             # ファイルを読み込む
-            with open(norm_path, 'rb') as f:
-                return f.read()
+            with open(abs_path, 'rb') as f:
+                content = f.read()
+                print(f"FileSystemHandler: {len(content):,} バイトを読み込みました")
+                return content
                 
         except (OSError, PermissionError) as e:
-            print(f"ファイル読み込みエラー: {norm_path}, {e}")
+            print(f"FileSystemHandler: ファイル読み込みエラー: {e}")
             return None
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
@@ -221,37 +369,20 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             ファイルストリーム。取得できない場合はNone
         """
-        norm_path = self.normalize_path(path)
+        abs_path = self._to_absolute_path(path)
         
         try:
             # ファイルが存在し、通常のファイルであるか確認
-            if not os.path.isfile(norm_path):
+            if not os.path.isfile(abs_path):
                 return None
             
             # ファイルストリームを開く
             # 注: 呼び出し元はこのストリームをcloseする責任がある
-            return open(norm_path, 'rb')
+            return open(abs_path, 'rb')
                 
         except (OSError, PermissionError) as e:
-            print(f"ファイルストリーム取得エラー: {norm_path}, {e}")
+            print(f"ファイルストリーム取得エラー: {abs_path}, {e}")
             return None
-    
-    def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
-        """
-        アーカイブファイル内のファイルの内容を読み込む
-        
-        このハンドラではアーカイブファイル内のファイル読み込みはサポートしていないため常にNoneを返す
-        
-        Args:
-            archive_path: アーカイブファイルのパス
-            file_path: アーカイブ内のファイルパス
-            
-        Returns:
-            常にNone
-        """
-        # ファイルシステムハンドラではアーカイブ内のファイル読み込みはサポートしていない
-        print(f"FileSystemHandler: アーカイブ読み込みはサポートされていません ({archive_path}/{file_path})")
-        return None
 
     def get_parent_path(self, path: str) -> str:
         """
@@ -263,14 +394,14 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             親ディレクトリのパス。親がない場合は空文字列
         """
-        norm_path = self.normalize_path(path)
+        abs_path = self._to_absolute_path(path)
         
         # ルートディレクトリの場合は空文字列を返す
-        if not norm_path or norm_path == '/':
+        if not abs_path or abs_path == '/':
             return ''
         
         # 親ディレクトリを取得
-        parent_dir = os.path.dirname(norm_path)
+        parent_dir = os.path.dirname(abs_path)
         
         return parent_dir
 
@@ -284,11 +415,11 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             ディレクトリの場合はTrue、そうでない場合はFalse
         """
-        norm_path = self.normalize_path(path)
+        abs_path = self._to_absolute_path(path)
         
         try:
             # パスがディレクトリかどうかを確認
-            return os.path.isdir(norm_path)
+            return os.path.isdir(abs_path)
         except:
             return False
 
@@ -302,61 +433,108 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             ディレクトリ内のすべてのエントリのリスト
         """
+        # 空の場合やパスが指定されていない場合は、現在のパスをデフォルトとして使用
+        if not path:
+            if self.current_path:
+                abs_path = self.current_path
+            else:
+                abs_path = os.getcwd()
+        else:
+            abs_path = self._to_absolute_path(path)
+        
+        print(f"FileSystemHandler: list_all_entries 開始 - パス: {abs_path}")
+        
         # ディレクトリが存在するか確認
-        if not os.path.isdir(path):
-            print(f"FileSystemHandler: ディレクトリが存在しません: {path}")
+        if not os.path.isdir(abs_path):
+            print(f"FileSystemHandler: ディレクトリが存在しません: {abs_path}")
             return []
         
         # すべてのエントリを格納するリスト
         all_entries = []
         
         try:
+            # まずルートディレクトリ自体をエントリとして追加
+            root_name = os.path.basename(abs_path.rstrip('/'))
+            if not root_name and abs_path:
+                # ルートディレクトリの場合（例：C:/ や Z:/）
+                if ':' in abs_path:
+                    # Windowsのドライブレターの場合
+                    drive_parts = abs_path.split(':')
+                    if len(drive_parts) > 0:
+                        root_name = drive_parts[0] + ":"
+                else:
+                    root_name = abs_path
+            
+            if root_name:
+                # create_entry_infoを使用してルートエントリを作成
+                root_entry = self.create_entry_info(
+                    name=root_name,
+                    abs_path=abs_path,
+                    type=EntryType.DIRECTORY,
+                    size=0,
+                    modified_time=None
+                )
+                all_entries.append(root_entry)
+                print(f"FileSystemHandler: ルートディレクトリエントリを追加: {root_name} ({abs_path})")
+            
             # ディレクトリを再帰的に走査
-            for root, dirs, files in os.walk(path):
+            for root, dirs, files in os.walk(abs_path):
                 # ディレクトリエントリを追加
                 for dir_name in dirs:
                     dir_path = os.path.join(root, dir_name).replace('\\', '/')
-                    rel_path = os.path.relpath(dir_path, path).replace('\\', '/')
                     
                     # ディレクトリの統計情報を取得
                     try:
-                        stat = os.stat(dir_path)
-                        mtime = datetime.fromtimestamp(stat.st_mtime)
-                        ctime = datetime.fromtimestamp(stat.st_ctime)
-                    except:
-                        mtime = None
-                        ctime = None
-                    
-                    # 隠しディレクトリかどうか判定
-                    is_hidden = dir_name.startswith('.') or bool(os.stat(dir_path).st_file_attributes & 0x2) if hasattr(os.stat(dir_path), 'st_file_attributes') else dir_name.startswith('.')
-                    
-                    # ディレクトリエントリを作成
-                    entry = EntryInfo(
-                        name=dir_name,
-                        path=dir_path,
-                        type=EntryType.DIRECTORY,
-                        size=0,
-                        modified_time=mtime,
-                        created_time=ctime,
-                        is_hidden=is_hidden
-                    )
-                    
-                    all_entries.append(entry)
+                        stat_info = os.stat(dir_path)
+                        mtime = datetime.fromtimestamp(stat_info.st_mtime)
+                        ctime = datetime.fromtimestamp(stat_info.st_ctime)
+                        
+                        # 隠しディレクトリかどうか判定
+                        is_hidden = False
+                        if os.name == 'nt' and hasattr(stat_info, 'st_file_attributes'):
+                            is_hidden = bool(stat_info.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN)
+                        else:
+                            is_hidden = dir_name.startswith('.')
+                        
+                        # create_entry_infoを使用してディレクトリエントリを作成
+                        entry = self.create_entry_info(
+                            name=dir_name,
+                            abs_path=dir_path,
+                            type=EntryType.DIRECTORY,
+                            size=0,
+                            modified_time=mtime,
+                            created_time=ctime,
+                            is_hidden=is_hidden
+                        )
+                        all_entries.append(entry)
+                        
+                    except Exception as e:
+                        print(f"FileSystemHandler: ディレクトリ情報取得エラー: {dir_path} - {e}")
+                        # 最小限の情報でエントリを作成して追加
+                        all_entries.append(self.create_entry_info(
+                            name=dir_name,
+                            abs_path=dir_path,
+                            type=EntryType.DIRECTORY,
+                            size=0
+                        ))
                 
                 # ファイルエントリを追加
                 for file_name in files:
                     file_path = os.path.join(root, file_name).replace('\\', '/')
-                    rel_path = os.path.relpath(file_path, path).replace('\\', '/')
                     
                     try:
                         # ファイル情報を取得
-                        stat = os.stat(file_path)
-                        size = stat.st_size
-                        mtime = datetime.fromtimestamp(stat.st_mtime)
-                        ctime = datetime.fromtimestamp(stat.st_ctime)
+                        stat_info = os.stat(file_path)
+                        size = stat_info.st_size
+                        mtime = datetime.fromtimestamp(stat_info.st_mtime)
+                        ctime = datetime.fromtimestamp(stat_info.st_ctime)
                         
                         # 隠しファイルかどうか判定
-                        is_hidden = file_name.startswith('.') or bool(stat.st_file_attributes & 0x2) if hasattr(stat, 'st_file_attributes') else file_name.startswith('.')
+                        is_hidden = False
+                        if os.name == 'nt' and hasattr(stat_info, 'st_file_attributes'):
+                            is_hidden = bool(stat_info.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN)
+                        else:
+                            is_hidden = file_name.startswith('.')
                         
                         # アーカイブファイルかどうか判定
                         _, ext = os.path.splitext(file_name.lower())
@@ -365,25 +543,24 @@ class FileSystemHandler(ArchiveHandler):
                         else:
                             entry_type = EntryType.FILE
                         
-                        # ファイルエントリを作成
-                        entry = EntryInfo(
+                        # create_entry_infoを使用してファイルエントリを作成
+                        entry = self.create_entry_info(
                             name=file_name,
-                            path=file_path,
+                            abs_path=file_path,
                             type=entry_type,
                             size=size,
                             modified_time=mtime,
                             created_time=ctime,
                             is_hidden=is_hidden
                         )
-                        
                         all_entries.append(entry)
                         
                     except Exception as e:
                         print(f"FileSystemHandler: ファイル情報取得エラー ({file_path}): {e}")
                         # エラーが発生しても最低限の情報でエントリを追加
-                        all_entries.append(EntryInfo(
+                        all_entries.append(self.create_entry_info(
                             name=file_name,
-                            path=file_path,
+                            abs_path=file_path,
                             type=EntryType.FILE,
                             size=0
                         ))
@@ -395,7 +572,7 @@ class FileSystemHandler(ArchiveHandler):
             print(f"FileSystemHandler: エントリ一覧取得中にエラー: {e}")
             import traceback
             traceback.print_exc()
-            return []
+            return all_entries if all_entries else []
 
     def list_all_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
         """
@@ -422,3 +599,120 @@ class FileSystemHandler(ArchiveHandler):
             True (常に絶対パスを使用)
         """
         return True
+
+    def _to_absolute_path(self, path: str) -> str:
+        """
+        相対パスを絶対パスに変換する
+        
+        Args:
+            path: 変換する相対または絶対パス
+            
+        Returns:
+            絶対パス
+        """
+        # パスを正規化
+        norm_path = self.normalize_path(path)
+        
+        # 空のパスが渡された場合は、現在のパスをそのまま返す
+        if not norm_path:
+            if self.current_path:
+                return self.current_path
+            else:
+                return os.getcwd()
+        
+        # 既に絶対パスならそのまま返す
+        if os.path.isabs(norm_path):
+            return norm_path
+            
+        # カレントパスが設定されていない場合はカレントディレクトリを基準にする
+        if not self.current_path:
+            return os.path.abspath(norm_path)
+            
+        # カレントパスを基準に絶対パスに変換
+        abs_path = os.path.join(self.current_path, norm_path).replace('\\', '/')
+        return abs_path
+
+    def can_archive(self) -> bool:
+        """
+        このハンドラがアーカイバとして機能するかどうかを返す
+        
+        FileSystemHandlerはアーカイバとして機能しない（圧縮/解凍機能を持たない）
+        
+        Returns:
+            常にFalse（アーカイバではない）
+        """
+        return False  # ファイルシステムハンドラはアーカイバではない
+
+    def create_entry_info(self, name: str, abs_path: str, type: EntryType, size: int, 
+                         created_time: Optional[datetime] = None, modified_time: Optional[datetime] = None, 
+                         is_hidden: bool = False) -> EntryInfo:
+        """
+        ファイルシステムパスからEntryInfoオブジェクトを作成する
+        
+        Args:
+            name: エントリの名前
+            abs_path: エントリの絶対パス
+            type: エントリの種類
+            size: ファイルサイズ
+            created_time: 作成日時
+            modified_time: 更新日時
+            is_hidden: 隠しファイルか
+            
+        Returns:
+            作成されたEntryInfo
+        """
+        # パスを正規化
+        norm_path = abs_path.replace('\\', '/')
+        
+        # 相対パスを計算
+        rel_path = self._calc_relative_path(norm_path)
+        
+        # エントリを作成
+        entry = EntryInfo(
+            name=name,
+            path=norm_path,
+            rel_path=rel_path,
+            type=type,
+            size=size,
+            created_time=created_time,
+            modified_time=modified_time,
+            is_hidden=is_hidden
+        )
+        
+        # name_in_arcを設定（ルートからの相対パス）
+        # 内部パス名はrel_pathと同じ（FileSystemHandlerの場合）
+        entry.name_in_arc = rel_path
+        
+        return entry
+
+    def _calc_relative_path(self, path: str) -> str:
+        """
+        current_pathに対する相対パスを計算する
+        
+        Args:
+            path: 計算する絶対パス
+            
+        Returns:
+            相対パス。current_pathが設定されていない場合やパスが含まれない場合は
+            元のパスをそのまま返す
+        """
+        if not self.current_path:
+            return path
+            
+        norm_current = self.current_path.rstrip('/').replace('\\', '/')
+        norm_path = path.replace('\\', '/')
+        
+        # カレントパスの配下かどうか確認
+        if norm_path.startswith(norm_current):
+            # カレントパスからの相対パスを返す
+            if len(norm_path) > len(norm_current):
+                if norm_path[len(norm_current)] == '/':
+                    # スラッシュがある場合は、その後の部分を返す
+                    return norm_path[len(norm_current) + 1:]
+            
+            # カレントパスと完全一致する場合は空文字を返す
+            if norm_path == norm_current:
+                return ""
+                
+        # カレントパスの配下でない場合は、絶対パスをそのまま返す
+        return norm_path

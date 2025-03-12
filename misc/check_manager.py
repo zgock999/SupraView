@@ -47,6 +47,7 @@ def print_help():
     print("                  空白を含むパスは \"path/to file.zip\" のように引用符で囲みます")
     print("  L [path]      - アーカイブ内のファイル/ディレクトリを一覧表示（List archive contents）")
     print("  R [path]      - アーカイブ内を再帰的に一覧表示（Recursive list all entries）")
+    print("  RC            - キャッシュを持つエントリを表示（Show cached entries）")
     print("  E <path>      - アーカイブからファイルを抽出（Extract file from archive）")
     print("                  空白を含むパスは引用符で囲みます")
     print("  I             - アーカイブ情報を表示（Information about archive）")
@@ -95,6 +96,7 @@ def set_archive_path(path: str) -> bool:
         if isinstance(manager, EnhancedArchiveManager):
             manager.set_current_path(path)
         
+        print(f"エントリ数: {len(all_entries)}")
         # マネージャーがこのファイルを処理できるか確認
         handler_info = manager.get_handler(path)
         if handler_info:
@@ -132,12 +134,18 @@ def list_archive_contents(internal_path: str = "") -> bool:
         if internal_path:
             internal_path = normalize_path(internal_path)
             print(f"パスの内容を取得中: {internal_path}")
-            # 相対パスを使用
-            entries = manager.list_entries(internal_path)
+            
+            # 相対パスを使用してマネージャーから直接エントリを取得
+            try:
+                entries = manager.list_entries(internal_path)
+            except FileNotFoundError as e:
+                print(f"エラー: 指定されたパスが見つかりません: {internal_path}")
+                if debug_mode:
+                    traceback.print_exc()
+                return False
         else:
-            # ルートの場合は現在のアーカイブパスを使用
+            # ルートの場合は空のパスを使用
             print(f"アーカイブルートの内容を取得中")
-            #entries = manager.list_entries(current_archive_path)
             entries = manager.list_entries("")
         
         if not entries:
@@ -182,25 +190,16 @@ def recursive_list_archive_contents(internal_path: str = "") -> bool:
     if not current_archive_path:
         print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
         return False
-    
-    try:
-        # 内部パスが指定された場合は正規化して相対パスとして使用
-        if internal_path:
-            internal_path = normalize_path(internal_path)
-            print(f"アーカイブ内 {internal_path} を再帰的に探索中")
-            target_path = internal_path
-        else:
-            # ルートの場合は現在のアーカイブパスを使用
-            print(f"アーカイブ全体を再帰的に探索中")
-            target_path = current_archive_path
-            
-        print("※ネストされたアーカイブも解析するため、時間がかかる場合があります...")
-        
-        # 再帰的なエントリリスト取得を開始
-        start_time = time.time()
-        all_entries = manager.list_all_entries(target_path, recursive=True)
-        elapsed_time = time.time() - start_time
-        
+    try:       
+        all_entries_dict = manager.get_entry_cache()
+        if not all_entries_dict:
+            print(f"アーカイブ内にエントリが見つかりませんでした") 
+            return False
+
+        # 辞書の値（EntryInfoのリスト）を連結してすべてのエントリを取得
+        all_entries = []
+        for entries_list in all_entries_dict.values():
+            all_entries.extend(entries_list)
         if not all_entries:
             print(f"アーカイブ内にエントリが見つかりませんでした")
             return False
@@ -211,7 +210,6 @@ def recursive_list_archive_contents(internal_path: str = "") -> bool:
         archives = [e for e in all_entries if e.type == EntryType.ARCHIVE]
         
         # 結果を表示
-        print(f"\n再帰探索結果: 合計 {len(all_entries)} エントリを検出 ({elapsed_time:.2f}秒)")
         print(f"ディレクトリ: {len(directories)}, ファイル: {len(files)}, アーカイブ: {len(archives)}")
         
         # すべてのエントリを一覧表示
@@ -219,13 +217,20 @@ def recursive_list_archive_contents(internal_path: str = "") -> bool:
         print("{:<50} {:>12} {:>20} {}".format("パス", "サイズ", "更新日時", "種類"))
         print("-" * 90)
         
+        # 現在のパスをベースパスとして使用
+        base_path = current_archive_path
+        if os.path.isdir(base_path) and not base_path.endswith('/'):
+            base_path += '/'
+        
         for entry in sorted(all_entries, key=lambda e: e.path):
             type_str = "DIR" if entry.type == EntryType.DIRECTORY else "ARC" if entry.type == EntryType.ARCHIVE else "FILE"
             size_str = "-" if entry.type == EntryType.DIRECTORY else f"{entry.size:,}"
             date_str = "-" if entry.modified_time is None else entry.modified_time.strftime("%Y-%m-%d %H:%M:%S")
             
+            # 絶対パスから相対パスを計算
+            path_str = entry.rel_path
+            
             # 長いパスは省略
-            path_str = entry.path
             if len(path_str) > 48:
                 path_str = "..." + path_str[-45:]
                 
@@ -368,7 +373,7 @@ def extract_archive_file(file_path: str) -> bool:
                 text = content.decode(encoding)
                 # 長いテキストは省略表示
                 max_chars = 500
-                if len(text) > max_chars:
+                if (len(text) > max_chars):
                     print(text[:max_chars] + "...(省略)")
                 else:
                     print(text)
@@ -574,6 +579,71 @@ def show_handlers_info() -> bool:
         return False
 
 
+def show_cached_entries() -> bool:
+    """
+    キャッシュ属性を持つエントリを一覧表示する
+    
+    Returns:
+        成功した場合はTrue、失敗した場合はFalse
+    """
+    global current_archive_path, manager
+    
+    if not current_archive_path:
+        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
+        return False
+    
+    try:
+        # キャッシュからエントリを取得
+        all_entries_dict = manager.get_entry_cache()
+        if not all_entries_dict:
+            print(f"キャッシュにエントリが見つかりませんでした。")
+            return False
+        
+        # すべてのキャッシュエントリを集める
+        cached_entries = []
+        for path, entries in all_entries_dict.items():
+            for entry in entries:
+                if hasattr(entry, 'cache') and entry.cache is not None:
+                    cached_entries.append(entry)
+        
+        if not cached_entries:
+            print("キャッシュを持つエントリはありません。")
+            return False
+        
+        # キャッシュを持つエントリを表示
+        print("\nキャッシュを持つエントリ一覧:")
+        print("{:<50} {:<12} {:<20}".format("パス", "キャッシュタイプ", "サイズ"))
+        print("-" * 85)
+        
+        for entry in sorted(cached_entries, key=lambda e: e.rel_path):
+            # キャッシュの種類とサイズを取得
+            cache_type = type(entry.cache).__name__
+            cache_size = ""
+            
+            if isinstance(entry.cache, bytes):
+                cache_size = f"{len(entry.cache):,} バイト"
+            elif isinstance(entry.cache, str) and os.path.exists(entry.cache):
+                try:
+                    cache_size = f"{os.path.getsize(entry.cache):,} バイト (ファイル)"
+                except:
+                    cache_size = "(一時ファイル)"
+            
+            # 長いパスは省略
+            path_str = entry.rel_path
+            if len(path_str) > 48:
+                path_str = "..." + path_str[-45:]
+            
+            print("{:<50} {:<12} {:<20}".format(path_str, cache_type, cache_size))
+        
+        print(f"\n合計: {len(cached_entries)} エントリ")
+        return True
+    except Exception as e:
+        print(f"エラー: キャッシュエントリ表示に失敗しました: {e}")
+        if debug_mode:
+            traceback.print_exc()
+        return False
+
+
 def parse_command_args(args_str: str) -> str:
     """
     コマンド引数を解析して、引用符で囲まれた文字列を適切に処理する
@@ -616,6 +686,11 @@ def main():
                 
             cmd = cmd_input[0].upper()
             args_str = cmd_input[1:].strip() if len(cmd_input) > 1 else ""
+            
+            # 2文字コマンドの処理
+            if cmd_input.upper() == 'RC':
+                show_cached_entries()
+                continue
             
             # 引数を解析（引用符で囲まれたパスを適切に処理）
             args = parse_command_args(args_str)

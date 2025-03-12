@@ -30,7 +30,7 @@ class EntryInfo:
     物理ファイルとアーカイブ内のファイルの両方を表現できる
     """
     name: str                  # エントリの名前（ファイル名またはディレクトリ名）
-    path: str                  # エントリへのパス（仮想パス）
+    path: str                  # エントリへのパス（仮想パスシステムでの絶対パス）
     type: EntryType            # エントリのタイプ
     size: int = 0              # ファイルサイズ（バイト）
     created_time: Optional[datetime] = None  # 作成日時
@@ -38,12 +38,16 @@ class EntryInfo:
     is_hidden: bool = False    # 隠しファイルかどうか
     name_in_arc: Optional[str] = None  # アーカイブ内の元のファイル名（エンコード変換前）
     attrs: Dict = None         # 追加属性（拡張用）
-    cache: Optional[Union[bytes, str]] = None  # 新しいフィールド
+    cache: Optional[Union[bytes, str]] = None  # コンテンツキャッシュ（バイトまたは一時ファイルパス）
+    rel_path: Optional[str] = None  # エントリへの相対パス（カレントパスからの相対）
 
     def __post_init__(self):
         """オブジェクト初期化後の処理"""
         if self.attrs is None:
             self.attrs = {}
+        # 相対パスが指定されていない場合は、絶対パスをそのまま設定
+        if self.rel_path is None:
+            self.rel_path = self.path
     
     @property
     def extension(self) -> str:
@@ -65,6 +69,9 @@ class ArchiveHandler(ABC):
     
     このクラスは、ファイルシステムとアーカイブファイルを透過的に扱うためのインターフェースを定義する
     """
+    def __init__(self):
+        # 現在のベースパス（相対パスの基準となるパス）
+        self.current_path: str = ""
     
     @property
     @abstractmethod
@@ -72,6 +79,7 @@ class ArchiveHandler(ABC):
         """このハンドラがサポートするファイル拡張子のリスト"""
         pass
     
+
     def use_absolute(self) -> bool:
         """
         絶対パスを使用するかどうかを返す
@@ -136,11 +144,10 @@ class ArchiveHandler(ABC):
         if not self.can_handle_bytes(archive_data, path):
             print(f"{self.__class__.__name__}: バイトデータからのリスト取得はサポートしていません")
             return []
-        
         # デフォルト実装は空のリストを返す（サブクラスでオーバーライドする）
         print(f"{self.__class__.__name__}: list_entries_from_bytes の実装が必要です")
         return []
-    
+        
     @abstractmethod
     def get_entry_info(self, path: str) -> Optional[EntryInfo]:
         """
@@ -154,18 +161,7 @@ class ArchiveHandler(ABC):
         """
         pass
     
-    @abstractmethod
-    def read_file(self, path: str) -> Optional[bytes]:
-        """
-        指定されたパスのファイルの内容を読み込む
-        
-        Args:
-            path: 読み込むファイルのパス
-            
-        Returns:
-            ファイルの内容（バイト配列）。読み込みに失敗した場合はNone
-        """
-        pass
+    # read_fileを削除 - read_archive_fileを主要APIとして使用する
     
     def read_file_from_bytes(self, archive_data: bytes, file_path: str) -> Optional[bytes]:
         """
@@ -182,11 +178,10 @@ class ArchiveHandler(ABC):
         if not self.can_handle_bytes(archive_data, file_path):
             print(f"{self.__class__.__name__}: バイトデータからのファイル読み込みはサポートしていません")
             return None
-        
         # デフォルト実装はNoneを返す（サブクラスでオーバーライドする）
         print(f"{self.__class__.__name__}: read_file_from_bytes の実装が必要です")
         return None
-    
+        
     @abstractmethod
     def get_stream(self, path: str) -> Optional[BinaryIO]:
         """
@@ -204,6 +199,7 @@ class ArchiveHandler(ABC):
     def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
         """
         アーカイブファイル内のファイルの内容を読み込む
+        パスはハンドラによって相対パスまたは絶対パスとして扱われる
         
         Args:
             archive_path: アーカイブファイルのパス
@@ -275,7 +271,6 @@ class ArchiveHandler(ABC):
         pass
     
     # 以下は共通実装を提供（サブクラスで必要に応じてオーバーライド可能）
-    
     def _split_path(self, path: str) -> Tuple[str, str]:
         """
         パスをアーカイブファイルのパスと内部パスに分割する
@@ -330,9 +325,9 @@ class ArchiveHandler(ABC):
             normalized = normalized[:-1]
             
         return normalized
-
+    
     def save_to_temp_file(self, content: bytes, extension: str) -> Optional[str]:
-        """
+        """ 
         バイナリコンテンツを一時ファイルに保存する
         
         Args:
@@ -376,6 +371,7 @@ class ArchiveHandler(ABC):
                     print(f"ArchiveHandler: 警告: 書き込みサイズと読み取りサイズが一致しません")
             
             return temp_path
+        
         except Exception as e:
             print(f"ArchiveHandler: 一時ファイル作成エラー: {e}")
             import traceback
@@ -396,7 +392,7 @@ class ArchiveHandler(ABC):
                 print(f"ArchiveHandler: 一時ファイルを削除: {temp_file_path}")
         except Exception as e:
             print(f"ArchiveHandler: 一時ファイル削除エラー: {e}")
-
+    
     def needs_encoding_conversion(self) -> bool:
         """
         このハンドラが文字コード変換を必要とするかどうかを返す
@@ -408,6 +404,88 @@ class ArchiveHandler(ABC):
             文字コード変換が必要な場合はTrue、そうでなければFalse
         """
         return False
+    
+    def set_current_path(self, path: str) -> None:
+        """
+        現在のベースパスを設定する
+        相対パスを解決する際に使用される
+        
+        Args:
+            path: ベースパスとするディレクトリまたはファイルのパス
+        """
+        self.current_path = path
+    
+    def to_relative_path(self, abs_path: str) -> str:
+        """
+        絶対パスを現在のベースパスからの相対パスに変換する
+        
+        Args:
+            abs_path: 変換する絶対パス
+            
+        Returns:
+            相対パス（カレントパスからの相対）
+        """
+        if not abs_path:
+            return ""
+        
+        # パスを正規化
+        norm_path = self.normalize_path(abs_path)
+        
+        # カレントパスが設定されていない場合はそのまま返す
+        if not self.current_path:
+            return norm_path
+        
+        # カレントパスを正規化
+        norm_current = self.normalize_path(self.current_path)
+        
+        # カレントパスでの接頭辞チェック
+        if norm_path.startswith(norm_current):
+            # カレントパスを除去（先頭のスラッシュも含む）
+            rel_path = norm_path[len(norm_current):]
+            # スラッシュで始まる場合は削除
+            if rel_path.startswith('/'):
+                rel_path = rel_path[1:]
+            return rel_path
+        
+        # カレントパスの接頭辞がなければそのまま返す
+        return norm_path
+    
+    def create_entry_info(self, name: str, abs_path: str, type: EntryType, **kwargs) -> EntryInfo:
+        """
+        相対パスを自動計算したEntryInfoオブジェクトを作成する
+        
+        Args:
+            name: エントリの名前
+            abs_path: エントリへの絶対パス
+            type: エントリのタイプ
+            **kwargs: その他のEntryInfo引数
+            
+        Returns:
+            相対パスが設定されたEntryInfoオブジェクト
+        """
+        # 相対パスを計算
+        rel_path = self.to_relative_path(abs_path)
+        
+        # EntryInfoオブジェクトを作成して返す
+        return EntryInfo(
+            name=name,
+            path=abs_path,
+            type=type,
+            rel_path=rel_path,
+            **kwargs
+        )
+    
+    def can_archive(self) -> bool:
+        """
+        このハンドラがアーカイバとして機能するかどうかを返す
+        
+        アーカイバとして機能するハンドラは圧縮アーカイブファイルを直接扱える。
+        FileSystemHandlerなどのアーカイブでないハンドラはFalseを返す。
+        
+        Returns:
+            アーカイバとして機能する場合はTrue、そうでなければFalse
+        """
+        return True  # デフォルトではアーカイバとして機能する
 
 
 class ArchiveManager:
@@ -448,13 +526,14 @@ class ArchiveManager:
         # 正規化したパスを使用
         norm_path = ArchiveHandler.normalize_path(path)
         print(f"Getting handler for path: {norm_path}")
+        
         # キャッシュを確認
         if norm_path in self.path_handler_cache:
             print(f"Handler found in cache: {self.path_handler_cache[norm_path].__class__.__name__}")   
             return self.path_handler_cache[norm_path]
         
         # パスを処理できるハンドラを探す
-        for handler in self.handlers.__reversed__(): 
+        for handler in self.handlers.__reversed__():
             if handler.can_handle(norm_path):
                 # キャッシュに格納して返す
                 self.path_handler_cache[norm_path] = handler
@@ -511,7 +590,6 @@ class ArchiveManager:
         handler = self.get_handler(path)
         if handler is not None:
             print(f"Reading file by {handler.__class__.__name__}: {path}")
-            
             # アーカイブ内のファイルパスを判定
             parent_path = self.get_parent_path(path)
             entry_info = self.get_entry_info(parent_path)
@@ -524,7 +602,7 @@ class ArchiveManager:
                 return handler.read_archive_file(parent_path, relative_path)
             else:
                 # 通常のファイル
-                return handler.read_file(path)
+                return handler.read_archive_file(path, "")
         return None
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
@@ -566,15 +644,14 @@ class ArchiveManager:
             親ディレクトリのパス
         """
         norm_path = ArchiveHandler.normalize_path(path)
-        
         if not norm_path or norm_path == '/':
             return ''
-            
+        
         # 末尾のスラッシュを除去
         if norm_path.endswith('/'):
             norm_path = norm_path[:-1]
-            
-        # 最後のスラッシュの位置を探して親パスを取得
+        
+        # 最後のスラッシュの位置を取得
         last_slash = norm_path.rfind('/')
         if (last_slash > 0):
             return norm_path[:last_slash]
@@ -598,12 +675,12 @@ class ArchiveManager:
         # 物理ファイルシステムのディレクトリかチェック
         if os.path.isdir(path):
             return True
-            
+        
         # アーカイブ内のパスの場合、エントリ情報を取得して判定
         entry_info = self.get_entry_info(path)
         if entry_info:
             return entry_info.type == EntryType.DIRECTORY or entry_info.type == EntryType.ARCHIVE
-            
+        
         # 存在しないパスの場合はFalseを返す
         return False
     
@@ -623,13 +700,12 @@ class ArchiveManager:
         if handler is None:
             print(f"ArchiveManager: アーカイブ {archive_path} に対応するハンドラが見つかりません")
             return None
-            
-        # アーカイブ内のファイルを読み込む
+        
         print(f"ArchiveManager: {handler.__class__.__name__} でアーカイブファイル読み込み: {archive_path}/{file_path}")
         
-        # 通常のファイル読み込み - ネスト処理はEnhancedArchiveManagerで対応
+        # アーカイブ内のファイルを読み込む
         return handler.read_archive_file(archive_path, file_path)
-
+    
     def _get_all_archive_extensions(self) -> List[str]:
         """すべてのハンドラがサポートするアーカイブ拡張子のリストを取得"""
         extensions = []
