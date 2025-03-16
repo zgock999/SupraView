@@ -1078,6 +1078,7 @@ class ZipHandler(ArchiveHandler):
                             all_entries.append(self.create_entry_info(
                                 name=dir_name,
                                 abs_path=entry_path,
+                                rel_path=name,
                                 size=0,
                                 modified_time=None,
                                 type=EntryType.DIRECTORY,
@@ -1104,6 +1105,7 @@ class ZipHandler(ArchiveHandler):
                                 name=file_name,
                                 abs_path=file_path,
                                 size=info.file_size,
+                                rel_path=name,
                                 modified_time=timestamp,
                                 type=entry_type,
                                 name_in_arc=original_name
