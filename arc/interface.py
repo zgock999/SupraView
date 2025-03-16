@@ -8,16 +8,12 @@ import os
 from typing import List, Optional, BinaryIO, Dict
 
 from .arc import EntryInfo, EntryType
-from .manager import ArchiveManager
-from .enhanced import EnhancedArchiveManager
 from .handler.handler import ArchiveHandler
-from .handlers import register_standard_handlers  # handlers.py からインポート
 
 # シングルトンインスタンス
-_instance: ArchiveManager = None
+_instance = None
 
-
-def get_archive_manager() -> ArchiveManager:
+def get_archive_manager():
     """
     アプリケーション全体で共有するアーカイブマネージャーのシングルトンインスタンスを取得する
     
@@ -32,13 +28,17 @@ def get_archive_manager() -> ArchiveManager:
     return _instance
 
 
-def create_archive_manager() -> ArchiveManager:
+def create_archive_manager():
     """
     新しいアーカイブマネージャーのインスタンスを作成する
     
     Returns:
         設定済みの新しいアーカイブマネージャー
     """
+    # ここで直接 EnhancedArchiveManager をインポート (循環参照を避けるため遅延インポート)
+    from .manager.enhanced import EnhancedArchiveManager
+    from .handlers import register_standard_handlers
+    
     # 強化版のマネージャーを使用
     manager = EnhancedArchiveManager()
     try:
@@ -56,6 +56,7 @@ def reset_manager() -> None:
     _instance = None
 
 
+# 以下はすべて委譲メソッド - シングルトンインスタンスに処理を委ね、追加の機能を提供
 def list_entries(path: str) -> List[EntryInfo]:
     """
     指定されたパスの配下にあるエントリのリストを取得する
@@ -235,6 +236,7 @@ def get_entry_cache() -> Dict[str, List[EntryInfo]]:
     """
     manager = get_archive_manager()
     
+    from .manager.enhanced import EnhancedArchiveManager
     # EnhancedArchiveManagerの場合のみキャッシュを取得
     if isinstance(manager, EnhancedArchiveManager):
         return manager.get_entry_cache()

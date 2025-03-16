@@ -21,7 +21,7 @@ try:
     from PySide6.QtGui import QResizeEvent, QPixmap, QImage
 
     # アーカイブマネージャーのインポート
-    from arc.manager import get_archive_manager
+    from arc.interface import get_archive_manager
     from arc.arc import EntryInfo, EntryType
 except ImportError as e:
     print(f"エラー: 必要なライブラリの読み込みに失敗しました: {e}")

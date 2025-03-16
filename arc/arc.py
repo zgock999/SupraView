@@ -39,46 +39,52 @@ class EntryInfo:
     """
     
     def __init__(self, 
-                 name: str, 
-                 path: str = "",
-                 type: EntryType = EntryType.UNKNOWN,
-                 size: int = 0,
+                 name: str,
+                 path: str = "",  # path を非必須に変更
+                 rel_path: Optional[str] = None, 
+                 type: EntryType = EntryType.FILE,
+                 size: int = 0, 
                  modified_time: Optional[datetime.datetime] = None,
                  created_time: Optional[datetime.datetime] = None,
                  is_hidden: bool = False,
-                 name_in_arc: str = "",
-                 attrs: Dict[str, Any] = None,
-                 rel_path: str = "",  # 追加: 親アーカイブからの相対パス
-                 cache: Any = None):  # 追加: キャッシュを保持するためのプロパティ
+                 name_in_arc: Optional[str] = None,  # デフォルト値を None に変更
+                 attrs: Optional[Dict[str, Any]] = None,
+                 abs_path: str = ""
+                 ):
         """
         エントリ情報を初期化する
         
         Args:
-            name: エントリの名前
-            path: エントリの絶対パス
-            type: エントリの種別 (ファイル/ディレクトリ)
-            size: ファイルサイズ (バイト単位)
+            name: エントリ名（ファイル名またはディレクトリ名）
+            path: エントリのパス（省略可能）
+            rel_path: 基準ディレクトリからの相対パス
+            type: エントリのタイプ（FILE, DIRECTORY, ARCHIVE）
+            size: サイズ（バイト）
             modified_time: 更新日時
             created_time: 作成日時
-            is_hidden: 隠しファイルかどうか
-            name_in_arc: アーカイブ内での名前 (エンコーディング対応用)
-            attrs: その他の属性を格納する辞書
-            rel_path: アーカイブパスからの相対パス
-            cache: キャッシュデータ (バイト列やパスなど)
+            is_hidden: 隠しファイル/ディレクトリかどうか
+            name_in_arc: アーカイブ内での名前（Noneの場合はnameが使用される）
+            attrs: その他の属性（辞書型）
+            abs_path: 絶対パス（指定がなければpathが使用される）
         """
         self.name = name
         self.path = path
+        # rel_pathをそのまま使用（pathで置き換える処理を撤廃）
+        self.rel_path = rel_path
         self.type = type
         self.size = size
         self.modified_time = modified_time
         self.created_time = created_time
         self.is_hidden = is_hidden
-        self.name_in_arc = name_in_arc if name_in_arc else name
-        self.attrs = attrs if attrs is not None else {}
-        self.rel_path = rel_path if rel_path else path  # 相対パスが指定されていなければパスを使用
-        self.cache = cache  # キャッシュを保持するためのプロパティ
+        self.name_in_arc = name if name_in_arc is None else name_in_arc  # None の場合のみ name を使用
+        self.attrs = attrs or {}
+        self.abs_path = abs_path if abs_path else path
 
 # ArchiveManager クラスの宣言 (循環インポートを避けるため)
 class ArchiveManager:
     """アーカイブマネージャーインターフェースクラス (前方宣言)"""
     pass
+
+# 前方宣言の移動
+# manager.manager モジュールに実際の実装があることを示すコメントを追加
+# 実際の実装は manager/manager.py に移動

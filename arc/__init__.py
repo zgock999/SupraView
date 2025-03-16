@@ -1,11 +1,16 @@
 """
-アーカイブアクセスモジュール
+SupraView アーカイブ処理モジュール
+
+様々なアーカイブフォーマットに対応する統一インターフェースを提供
 """
 
-from .arc import ArchiveManager, EntryType, EntryInfo
-from .manager import get_archive_manager, create_archive_manager, reset_manager
+# 基本型のみをインポート (循環参照を避けるため)
+from .arc import EntryType, EntryInfo
+
+# インターフェース関数をインポート
+from .interface import get_archive_manager, create_archive_manager, reset_manager
 
 __all__ = [
-    'ArchiveManager', 'EntryInfo', 'EntryType',
+    'EntryInfo', 'EntryType',
     'get_archive_manager', 'create_archive_manager', 'reset_manager'
 ]

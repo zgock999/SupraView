@@ -305,6 +305,8 @@ class FileSystemHandler(ArchiveHandler):
             return self.create_entry_info(
                 name=name,
                 abs_path=abs_path,
+                rel_path=path,
+                name_in_arc=path,
                 type=entry_type,
                 size=stat_info.st_size,
                 created_time=ctime,
@@ -467,9 +469,11 @@ class FileSystemHandler(ArchiveHandler):
             
             if root_name:
                 # create_entry_infoを使用してルートエントリを作成
+                rel_path = self.to_relative_path(abs_path)
                 root_entry = self.create_entry_info(
                     name=root_name,
-                    abs_path=abs_path,
+                    rel_path=rel_path,
+                    name_in_arc=rel_path,
                     type=EntryType.DIRECTORY,
                     size=0,
                     modified_time=None
@@ -497,9 +501,13 @@ class FileSystemHandler(ArchiveHandler):
                             is_hidden = dir_name.startswith('.')
                         
                         # create_entry_infoを使用してディレクトリエントリを作成
+                        rel_path = self.to_relative_path(dir_path)
                         entry = self.create_entry_info(
                             name=dir_name,
+                            path=dir_path,
                             abs_path=dir_path,
+                            rel_path=rel_path,
+                            name_in_arc=rel_path,
                             type=EntryType.DIRECTORY,
                             size=0,
                             modified_time=mtime,
@@ -511,9 +519,11 @@ class FileSystemHandler(ArchiveHandler):
                     except Exception as e:
                         print(f"FileSystemHandler: ディレクトリ情報取得エラー: {dir_path} - {e}")
                         # 最小限の情報でエントリを作成して追加
+                        rel_path = self.to_relative_path(dir_path)
                         all_entries.append(self.create_entry_info(
                             name=dir_name,
-                            abs_path=dir_path,
+                            rel_path=rel_path,
+                            name_in_arc=rel_path,
                             type=EntryType.DIRECTORY,
                             size=0
                         ))
@@ -535,19 +545,14 @@ class FileSystemHandler(ArchiveHandler):
                             is_hidden = bool(stat_info.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN)
                         else:
                             is_hidden = file_name.startswith('.')
-                        
-                        # アーカイブファイルかどうか判定
-                        _, ext = os.path.splitext(file_name.lower())
-                        if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
-                            entry_type = EntryType.ARCHIVE
-                        else:
-                            entry_type = EntryType.FILE
-                        
+                                               
                         # create_entry_infoを使用してファイルエントリを作成
+                        rel_path = self.to_relative_path(file_path)
                         entry = self.create_entry_info(
                             name=file_name,
-                            abs_path=file_path,
-                            type=entry_type,
+                            rel_path=rel_path,
+                            name_in_arc=rel_path,
+                            type=EntryType.FILE,
                             size=size,
                             modified_time=mtime,
                             created_time=ctime,
@@ -558,9 +563,11 @@ class FileSystemHandler(ArchiveHandler):
                     except Exception as e:
                         print(f"FileSystemHandler: ファイル情報取得エラー ({file_path}): {e}")
                         # エラーが発生しても最低限の情報でエントリを追加
+                        rel_path = self.to_relative_path(file_path)
                         all_entries.append(self.create_entry_info(
                             name=file_name,
-                            abs_path=file_path,
+                            rel_path=rel_path,
+                            name_in_arc=rel_path,
                             type=EntryType.FILE,
                             size=0
                         ))
@@ -643,47 +650,6 @@ class FileSystemHandler(ArchiveHandler):
         """
         return False  # ファイルシステムハンドラはアーカイバではない
 
-    def create_entry_info(self, name: str, abs_path: str, type: EntryType, size: int, 
-                         created_time: Optional[datetime] = None, modified_time: Optional[datetime] = None, 
-                         is_hidden: bool = False) -> EntryInfo:
-        """
-        ファイルシステムパスからEntryInfoオブジェクトを作成する
-        
-        Args:
-            name: エントリの名前
-            abs_path: エントリの絶対パス
-            type: エントリの種類
-            size: ファイルサイズ
-            created_time: 作成日時
-            modified_time: 更新日時
-            is_hidden: 隠しファイルか
-            
-        Returns:
-            作成されたEntryInfo
-        """
-        # パスを正規化
-        norm_path = abs_path.replace('\\', '/')
-        
-        # 相対パスを計算
-        rel_path = self._calc_relative_path(norm_path)
-        
-        # エントリを作成
-        entry = EntryInfo(
-            name=name,
-            path=norm_path,
-            rel_path=rel_path,
-            type=type,
-            size=size,
-            created_time=created_time,
-            modified_time=modified_time,
-            is_hidden=is_hidden
-        )
-        
-        # name_in_arcを設定（ルートからの相対パス）
-        # 内部パス名はrel_pathと同じ（FileSystemHandlerの場合）
-        entry.name_in_arc = rel_path
-        
-        return entry
 
     def _calc_relative_path(self, path: str) -> str:
         """

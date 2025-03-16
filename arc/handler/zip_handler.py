@@ -451,7 +451,7 @@ class ZipHandler(ArchiveHandler):
         指定したパスのエントリ情報を取得する
         
         Args:
-            path: 情報を取得するパス
+            path: 情報を取得するパス(カレントパスからの相対パス)
             
         Returns:
             エントリ情報、またはNone（取得できない場合）
@@ -470,6 +470,8 @@ class ZipHandler(ArchiveHandler):
                 return self.create_entry_info(
                     name=os.path.basename(zip_path),
                     abs_path=zip_path,
+                    rel_path=path,
+                    name_in_arc=path,
                     size=file_stat.st_size,
                     modified_time=datetime.datetime.fromtimestamp(file_stat.st_mtime),
                     type=EntryType.ARCHIVE  # ZIPファイルはARCHIVEタイプ
@@ -478,98 +480,14 @@ class ZipHandler(ArchiveHandler):
                 return None
         
         # ZIPファイル内のエントリの情報を取得
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                # ZIP構造を取得
-                structure = self._get_zip_structure(zip_path, zf)
-                
-                # パスの正規化
-                if internal_path.endswith('/'):
-                    # ディレクトリパスの場合
-                    dir_path = internal_path
-                    parent_dir = os.path.dirname(dir_path.rstrip('/'))
-                    if parent_dir:
-                        parent_dir += '/'
-                    dir_name = os.path.basename(dir_path.rstrip('/'))
-                    
-                    # ディレクトリが存在するか確認
-                    if dir_path in structure:
-                        return EntryInfo(
-                            name=dir_name,
-                            path=path,
-                            size=0,
-                            modified_time=None,
-                            type=EntryType.DIRECTORY
-                        )
-                    elif parent_dir in structure and dir_name in structure[parent_dir]['dirs']:
-                        return EntryInfo(
-                            name=dir_name,
-                            path=path,
-                            size=0,
-                            modified_time=None,
-                            type=EntryType.DIRECTORY
-                        )
-                else:
-                    # ファイルパスの場合
-                    file_dir = os.path.dirname(internal_path)
-                    if file_dir:
-                        file_dir += '/'
-                    file_name = os.path.basename(internal_path)
-                    
-                    # ファイルが存在するか確認
-                    if file_dir in structure and file_name in structure[file_dir]['files']:
-                        try:
-                            # ファイル情報を取得
-                            file_path_in_zip = file_dir + file_name
-                            file_info = zf.getinfo(file_path_in_zip)
-                            timestamp = None
-                            if file_info.date_time != (0, 0, 0, 0, 0, 0):
-                                timestamp = datetime.datetime(*file_info.date_time)
-                                
-                            # name_in_arcにオリジナルのファイル名を設定
-                            original_name = None
-                            if file_dir in structure and file_name in structure[file_dir]['file_map']:
-                                original_name = structure[file_dir]['file_map'][file_name]
-                                
-                            # ファイルの拡張子をチェックしてアーカイブなら特別に処理
-                            _, ext = os.path.splitext(file_name.lower())
-                            entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
-                                
-                            return EntryInfo(
-                                name=file_name,
-                                path=path,
-                                size=file_info.file_size,
-                                modified_time=timestamp,
-                                type=entry_type,
-                                name_in_arc=original_name
-                            )
-                        except:
-                            # 最低限の情報でエントリを作成
-                            return EntryInfo(
-                                name=file_name,
-                                path=path,
-                                size=0,
-                                modified_time=None,
-                                type=EntryType.FILE
-                            )
-                            
-                    # ディレクトリとして試す
-                    dir_path = internal_path + '/'
-                    if dir_path in structure:
-                        return EntryInfo(
-                            name=os.path.basename(internal_path),
-                            path=path,
-                            size=0,
-                            modified_time=None,
-                            type=EntryType.DIRECTORY
-                        )
-                        
-                # 見つからなかった
-                return None
-        except Exception as e:
-            print(f"ZIPエントリ情報の取得でエラー: {str(e)}")
-            traceback.print_exc()
-            return None
+        # まずall_entriesを取得する
+        entries = self.list_all_entries(zip_path)
+        if not entries:
+            # エントリから相対パスが一致するエントリを探す
+            for entry in entries:
+                if entry.rel_path == path:
+                    return entry
+        return None
     
     def read_file(self, path: str) -> Optional[bytes]:
         """
@@ -976,6 +894,8 @@ class ZipHandler(ArchiveHandler):
     def list_all_entries(self, path: str) -> List[EntryInfo]:
         """
         指定したZIPアーカイブ内のすべてのエントリを再帰的に取得する（フィルタリングなし）
+        (この時点ではエントリの内容は読み込まない)
+        (この時点では不完全なエントリ情報であり、マネージャによる追加情報が必要)
         
         Args:
             path: ZIPアーカイブファイルのパス
@@ -1048,7 +968,7 @@ class ZipHandler(ArchiveHandler):
                         
                         all_entries.append(self.create_entry_info(
                             name=dir_name,
-                            abs_path=entry_path,
+                            rel_path=name,
                             size=0,
                             modified_time=None,
                             type=EntryType.DIRECTORY,
@@ -1057,7 +977,6 @@ class ZipHandler(ArchiveHandler):
                     else:
                         # ファイルの場合
                         file_name = os.path.basename(name)
-                        file_path = f"{zip_path}/{name}"
                         
                         # 日付情報の取得
                         timestamp = None
@@ -1067,17 +986,14 @@ class ZipHandler(ArchiveHandler):
                             except:
                                 pass
                         
-                        # ファイルの拡張子をチェックしてアーカイブなら特別に処理
-                        _, ext = os.path.splitext(file_name.lower())
-                        entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
-                            
+                        # ハンドラ層は厳密なアーカイブ判定は出来ないのでマネージャに委譲
                         all_entries.append(self.create_entry_info(
                             name=file_name,
-                            abs_path=file_path,
+                            rel_path=name,
+                            type=EntryType.FILE,
+                            name_in_arc=original_name,
                             size=info.file_size,
-                            modified_time=timestamp,
-                            type=entry_type,
-                            name_in_arc=original_name
+                            modified_time=timestamp
                         ))
                         
             print(f"ZipHandler: {zip_path} 内の全エントリ数: {len(all_entries)}")

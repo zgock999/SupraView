@@ -34,16 +34,7 @@ class ArchiveHandler:
             path: 設定するベースパス
         """
         self.current_path = path.replace('\\', '/')
-    
-    def use_absolute(self) -> bool:
-        """
-        絶対パスを使用するかどうかを返す
         
-        Returns:
-            絶対パスを使用する場合はTrue、相対パスを使用する場合はFalse
-        """
-        return False
-    
     def can_handle(self, path: str) -> bool:
         """
         指定されたパスがこのハンドラで処理可能かどうか
@@ -98,7 +89,7 @@ class ArchiveHandler:
         指定されたパスの配下にある全エントリを再帰的に取得する
         
         Args:
-            path: リストを取得するディレクトリのパス
+            path: リストを取得する書庫のパス
             
         Returns:
             エントリ情報のリスト。失敗した場合は空リスト
@@ -106,7 +97,7 @@ class ArchiveHandler:
         # デフォルト実装では、list_entriesを再帰的に呼び出す
         # サブクラスで効率的な実装に置き換えることを推奨
         result = []
-        entries = self.list_entries(path)
+        entries = self.list_entries("")
         
         if not entries:
             return []
@@ -161,20 +152,7 @@ class ArchiveHandler:
         """
         # サブクラスで実装
         return None
-    
-    def read_file(self, path: str) -> Optional[bytes]:
-        """
-        指定されたパスのファイルの内容を読み込む
         
-        Args:
-            path: 読み込むファイルのパス
-            
-        Returns:
-            ファイルの内容。読み込みに失敗した場合はNone
-        """
-        # サブクラスで実装
-        return None
-    
     def read_file_from_bytes(self, data: bytes, internal_path: str) -> Optional[bytes]:
         """
         指定されたバイトデータからファイルの内容を読み込む
@@ -275,74 +253,99 @@ class ArchiveHandler:
             print(f"一時ファイル作成エラー: {e}")
             return ""
     
-    def normalize_path(self, path: str) -> str:
+    def cleanup_temp_file(self, filepath: str) -> None:
         """
-        OSに依存しないパス正規化関数
+        一時ファイルを削除する
         
         Args:
-            path: 正規化する元のパス文字列
+            filepath: 削除する一時ファイルのパス
+        """
+        if filepath and os.path.exists(filepath):
+            try:
+                os.unlink(filepath)
+            except Exception as e:
+                if self.debug:
+                    print(f"一時ファイルの削除に失敗しました: {e}")
+
+    @staticmethod
+    def normalize_path(path: str) -> str:
+        """
+        パスを正規化する
+        
+        Args:
+            path: 正規化するパス
             
         Returns:
-            正規化されたパス文字列
+            正規化されたパス
         """
-        if path is None:
-            return ""
-            
-        # バックスラッシュをスラッシュに変換
+        # パスの区切り文字を統一
         normalized = path.replace('\\', '/')
         
         # 連続するスラッシュを1つに
         while '//' in normalized:
             normalized = normalized.replace('//', '/')
         
-        # WindowsドライブレターのUNIX形式表現を修正（例: /C:/path → C:/path）
-        if len(normalized) > 2 and normalized[0] == '/' and normalized[2] == ':':
-            normalized = normalized[1:]  # 先頭のスラッシュを削除
+        # 末尾のスラッシュを除去
+        if normalized.endswith('/') and len(normalized) > 1:
+            normalized = normalized[:-1]
             
         return normalized
-        
-    def create_entry_info(self, name: str, abs_path: str, 
-                         size: int = 0, modified_time = None, 
-                         type: EntryType = EntryType.FILE,
-                         name_in_arc: str = None) -> EntryInfo:
+
+    def to_relative_path(self, abs_path: str) -> str:
         """
-        EntryInfoオブジェクトを作成するヘルパーメソッド
+        絶対パスを現在のベースパスからの相対パスに変換する
+        
+        Args:
+            abs_path: 変換する絶対パス
+            
+        Returns:
+            相対パス（カレントパスからの相対）
+        """
+        if not abs_path:
+            return ""
+        
+        # パスを正規化
+        norm_path = self.normalize_path(abs_path)
+        
+        # カレントパスが設定されていない場合はそのまま返す
+        if not self.current_path:
+            return norm_path
+        
+        # カレントパスを正規化
+        norm_current = self.normalize_path(self.current_path)
+        
+        # カレントパスでの接頭辞チェック
+        if norm_path.startswith(norm_current):
+            # カレントパスを除去（先頭のスラッシュも含む）
+            rel_path = norm_path[len(norm_current):]
+            # スラッシュで始まる場合は削除
+            if rel_path.startswith('/'):
+                rel_path = rel_path[1:]
+            return rel_path
+        
+        # カレントパスの接頭辞がなければそのまま返す
+        return norm_path
+    
+    def create_entry_info(self, name: str, rel_path: str, type: EntryType, name_in_arc: str, **kwargs) -> EntryInfo:
+        """
+        必須情報だけは保証したEntryInfoオブジェクトを作成する
         
         Args:
             name: エントリの名前
-            abs_path: エントリの絶対パス
-            size: ファイルサイズ
-            modified_time: 更新日時
-            type: エントリタイプ
-            name_in_arc: アーカイブ内の元の名前（エンコーディング問題対応用）
+            rel_path: エントリへの書庫からのパス（マネージャ層で完成させるためのもの）
+            type: エントリのタイプ
+            name_in_arc: アーカイブ内のエントリ名(エンコードされていない生の名前)
+            **kwargs: その他のEntryInfo引数
             
         Returns:
-            作成されたEntryInfo
+            相対パスが設定されたEntryInfoオブジェクト
         """
-        # 絶対パスと相対パスの処理
-        abs_path = self.normalize_path(abs_path)
         
-        # 相対パスを計算（カレントパスからの相対）
-        rel_path = abs_path
-        if self.current_path:
-            current = self.normalize_path(self.current_path)
-            # カレントパスがabsパスの先頭にある場合
-            if abs_path.startswith(current + '/'):
-                rel_path = abs_path[len(current) + 1:]  # +1 で '/' も除去
-            elif abs_path == current:
-                rel_path = ""
-        
-        # name_in_arcがない場合は名前を使用
-        if name_in_arc is None:
-            name_in_arc = name
-            
-        # EntryInfoを作成して返す
+        # EntryInfoオブジェクトを作成して返す
         return EntryInfo(
             name=name,
-            path=abs_path,
             type=type,
-            size=size,
-            modified_time=modified_time,
+            rel_path=rel_path,
             name_in_arc=name_in_arc,
-            rel_path=rel_path
+            **kwargs
         )

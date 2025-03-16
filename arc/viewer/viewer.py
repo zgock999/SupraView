@@ -15,39 +15,34 @@ from datetime import datetime
 # 親パッケージからインポートできるようにパスを調整
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-try:
-    # PySide6のインポート
-    from PySide6.QtWidgets import (
-        QApplication, QMainWindow, QSplitter, QTreeView, QFileSystemModel,
-        QVBoxLayout, QHBoxLayout, QWidget, QLabel, QMessageBox,
-        QPushButton, QToolBar, QStatusBar, QFileDialog, QMenu, QHeaderView,
-        QStyle
-    )
-    from PySide6.QtCore import (
-        Qt, QDir, QModelIndex, QItemSelectionModel, Signal, Slot,
-        QObject, QSize, QUrl, QMimeData, QByteArray
-    )
-    from PySide6.QtGui import (
-        QIcon, QStandardItemModel, QStandardItem, QKeySequence,
-        QDragEnterEvent, QDropEvent, QResizeEvent,
-        QAction  # QActionはQtGuiからインポート
-    )
-    
-    # アーカイブマネージャーのインポート
-    from arc.interface import get_archive_manager  # interfaceモジュールからインポート
-    from arc.arc import EntryInfo, EntryType
-    from arc.enhanced import EnhancedArchiveManager
-    
-    # プレビューウィジェットのインポート
-    from arc.viewer.preview import FilePreviewWidget
-    
-    # 画像ビューアーのインポート
-    from arc.viewer.imageviewer import ImageViewerWindow
-    
-except ImportError as e:
-    print(f"エラー: 必要なライブラリの読み込みに失敗しました: {e}")
-    sys.exit(1)
+# PySide6のインポート
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QSplitter, QTreeView, QFileSystemModel,
+    QVBoxLayout, QHBoxLayout, QWidget, QLabel, QMessageBox,
+    QPushButton, QToolBar, QStatusBar, QFileDialog, QMenu, QHeaderView,
+    QStyle
+)
+from PySide6.QtCore import (
+    Qt, QDir, QModelIndex, QItemSelectionModel, Signal, Slot,
+    QObject, QSize, QUrl, QMimeData, QByteArray
+)
+from PySide6.QtGui import (
+    QIcon, QStandardItemModel, QStandardItem, QKeySequence,
+    QDragEnterEvent, QDropEvent, QResizeEvent,
+    QAction  # QActionはQtGuiからインポート
+)
 
+# アーカイブマネージャーのインポート
+from arc.interface import get_archive_manager  # interfaceモジュールからインポート
+from arc.arc import EntryInfo, EntryType
+from arc.manager.enhanced import EnhancedArchiveManager
+
+# プレビューウィジェットのインポート
+from arc.viewer.preview import FilePreviewWidget
+
+# 画像ビューアーのインポート
+from arc.viewer.imageviewer import ImageViewerWindow
+    
 
 class ArchiveViewModel(QStandardItemModel):
     """アーカイブ内のファイル/フォルダを表示するためのモデル"""

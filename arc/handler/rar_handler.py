@@ -21,7 +21,7 @@ except ImportError:
     print("RarHandler: Unix系では別途UnRARをインストールしてください。")
 
 from ..arc import EntryInfo, EntryType
-from .handler import ArchiveHandler  # 正しいimportパス
+from .handler import ArchiveHandler
 
 
 class RarHandler(ArchiveHandler):
@@ -624,7 +624,7 @@ class RarHandler(ArchiveHandler):
             # RARファイルを開く
             with rarfile.RarFile(archive_path) as rf:
                 # 共通関数を使用してすべてのエントリを取得
-                all_entries = self._get_all_entries_from_rarfile(rf)
+                all_entries = self._get_all_entries_from_rarfile(rf, archive_path)
                 print(f"RarHandler: {archive_path} 内の全エントリ数: {len(all_entries)}")
                 return all_entries
         except Exception as e:
@@ -634,7 +634,7 @@ class RarHandler(ArchiveHandler):
                 traceback.print_exc()
             return []
 
-    def _get_all_entries_from_rarfile(self, rf: 'rarfile.RarFile') -> List[EntryInfo]:
+    def _get_all_entries_from_rarfile(self, rf: 'rarfile.RarFile', archive_path: 'str') -> List[EntryInfo]:
         """
         rarfileオブジェクトからすべてのエントリを取得する共通関数
         
@@ -664,11 +664,11 @@ class RarHandler(ArchiveHandler):
                 
                 all_entries.append(self.create_entry_info(
                     name=dir_name,
-                    abs_path=item_path,
+                    rel_path=item_path,
+                    name_in_arc=item_path,  # 書庫内の相対パス
                     size=0,
                     modified_time=None,
-                    type=EntryType.DIRECTORY,
-                    name_in_arc=item_path  # 書庫内の相対パス
+                    type=EntryType.DIRECTORY
                 ))
             else:
                 # ファイルの場合
@@ -679,18 +679,14 @@ class RarHandler(ArchiveHandler):
                     mod_time = datetime.datetime(*info.date_time)
                 except:
                     mod_time = None
-                
-                # ファイルの拡張子をチェックしてアーカイブなら特別に処理
-                _, ext = os.path.splitext(file_name.lower())
-                entry_type = EntryType.ARCHIVE if ext in self.supported_extensions else EntryType.FILE
-                    
+                #print(f"RarHandler: エントリ: {file_name}, パス: {item_path}")
                 all_entries.append(self.create_entry_info(
                     name=file_name,
-                    abs_path=item_path,
+                    rel_path=item_path,
+                    name_in_arc=item_path,  # 書庫内の相対パス
                     size=info.file_size,
                     modified_time=mod_time,
-                    type=entry_type,
-                    name_in_arc=item_path  # 書庫内の相対パス
+                    type=EntryType.FILE
                 ))
         
         return all_entries
@@ -723,7 +719,7 @@ class RarHandler(ArchiveHandler):
                 # 一時ファイルを使用してRARを開く
                 with rarfile.RarFile(temp_file) as rf:
                     # 共通関数を使用してすべてのエントリを取得
-                    all_entries = self._get_all_entries_from_rarfile(rf)
+                    all_entries = self._get_all_entries_from_rarfile(rf,"")
                     print(f"RarHandler: メモリデータから全 {len(all_entries)} エントリを取得しました")
                     return all_entries
             finally:
@@ -797,39 +793,6 @@ class RarHandler(ArchiveHandler):
                 except:
                     pass
 
-    def save_to_temp_file(self, data: bytes, suffix: str = '.tmp') -> Optional[str]:
-        """
-        バイトデータを一時ファイルに保存する
-        
-        Args:
-            data: 保存するバイトデータ
-            suffix: 一時ファイルの拡張子
-            
-        Returns:
-            一時ファイルのパス。失敗した場合はNone
-        """
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp_path = tmp.name
-                tmp.write(data)
-                return tmp_path
-        except Exception as e:
-            print(f"一時ファイルの作成に失敗しました: {e}")
-            return None
-
-    def cleanup_temp_file(self, filepath: str) -> None:
-        """
-        一時ファイルを削除する
-        
-        Args:
-            filepath: 削除する一時ファイルのパス
-        """
-        if filepath and os.path.exists(filepath):
-            try:
-                os.unlink(filepath)
-            except Exception as e:
-                if self.debug:
-                    print(f"一時ファイルの削除に失敗しました: {e}")
 
     def _join_paths(self, base_path: str, rel_path: str) -> str:
         """

@@ -16,7 +16,7 @@ from typing import List, Optional, Dict, Any
 # パスの追加（親ディレクトリをインポートパスに含める）
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # アーカイブマネージャークラスをインポート
-from arc.enhanced import EnhancedArchiveManager
+from arc.manager.enhanced import EnhancedArchiveManager
 from arc.interface import get_archive_manager  # interfaceモジュールからインポート
 from arc.arc import EntryInfo, EntryType
 from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
@@ -63,7 +63,7 @@ def print_help():
 
 def set_archive_path(path: str) -> bool:
     """
-    現在のアーカイブパスを設定する
+    現在のアーカイブパスを設定
     
     Args:
         path: アーカイブファイルへのパス
@@ -86,7 +86,7 @@ def set_archive_path(path: str) -> bool:
         
     try:
         # 古い全エントリリストをクリア
-        all_entries = []
+        all_entries = {}
         
         # アーカイブファイルパスを設定
         current_archive_path = path
@@ -98,8 +98,8 @@ def set_archive_path(path: str) -> bool:
         # マネージャーにカレントパスを設定
         if isinstance(manager, EnhancedArchiveManager):
             manager.set_current_path(path)
-        
-        print(f"エントリ数: {len(all_entries)}")
+        all_entries = manager.get_entry_cache()
+        print(f"エントリ数: {len(all_entries.keys())}/{len(all_entries.values())}")
         # マネージャーがこのファイルを処理できるか確認
         handler_info = manager.get_handler(path)
         if handler_info:
@@ -647,54 +647,83 @@ def show_cached_entries() -> bool:
         return False
 
 
-def show_cached_entry_paths() -> bool:
+def show_cached_entry_paths(manager):
+    """キャッシュされているエントリのパスを表示する"""
+    missmatch_count = 0
+    if hasattr(manager, 'get_entry_cache'):
+        cache = manager.get_entry_cache()
+        print(f"キャッシュされているエントリ数: {len(cache)}")
+        
+        # キャッシュキーをソート - 空文字列は最後に表示する
+        sorted_keys = sorted(cache.keys(), key=lambda k: (k == "", k))
+        
+        # 連番を付けてすべてのエントリを表示
+        for idx, path in enumerate(sorted_keys, 1):
+            entry = cache[path]
+            
+            # すべてのエントリに対して同じフォーマットで表示（rel_pathの情報も含める）
+            # 空文字列キーも他のエントリと同じく一貫した形式で表示
+            if path == "":
+                display_path = '""'  # 空文字列キーを視覚的に表現
+            else:
+                display_path = path
+                
+            print(f"  {idx:3d}. {display_path}: {entry.name} ({entry.type.name}) [rel_path=\"{entry.rel_path}\"]")
+            
+            # キャッシュキーとrel_pathの不一致をチェック（末尾の/を考慮）
+            normalized_rel_path = entry.rel_path.rstrip('/')
+            if path != normalized_rel_path:
+                print(f"      ERROR: キーとrel_pathの不一致: キー=\"{path}\" vs rel_path=\"{entry.rel_path}\" (正規化後=\"{normalized_rel_path}\")")
+                missmatch_count += 1
+        
+        print(f"\nキャッシュキーとrel_pathの不一致数: {missmatch_count}")
+    else:
+        print("キャッシュ機能が利用できません")
+
+
+def show_cached_recursive(manager, path="", prefix=""):
     """
-    キャッシュされたすべてのエントリのrel_pathを表示する
-    
-    Returns:
-        成功した場合はTrue、失敗した場合はFalse
+    キャッシュを使って再帰的にファイルツリーを表示する
+    新しいキャッシュ形式（dict[str, EntryInfo]）に対応
     """
-    global current_archive_path, manager
+    if not hasattr(manager, 'get_entry_cache'):
+        print("このマネージャーはキャッシュ機能を持っていません")
+        return
     
-    if not current_archive_path:
-        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
-        return False
+    cache = manager.get_entry_cache()
+    if not cache:
+        print("キャッシュが空です")
+        return
     
-    try:
-        # キャッシュからエントリを取得
-        all_entries_dict = manager.get_entry_cache()
-        if not all_entries_dict:
-            print(f"キャッシュにエントリが見つかりませんでした。")
-            return False
-        
-        # すべてのキャッシュエントリを集める
-        all_rel_paths = []
-        for path, entries in all_entries_dict.items():
-            for entry in entries:
-                if hasattr(entry, 'rel_path') and entry.rel_path:
-                    all_rel_paths.append(entry.rel_path)
-        
-        if not all_rel_paths:
-            print("rel_path属性を持つエントリはありません。")
-            return False
-        
-        # 重複を削除して並び替え
-        unique_rel_paths = sorted(set(all_rel_paths))
-        
-        # rel_pathを表示
-        print("\nキャッシュされている全エントリのrel_path:")
-        print("-" * 80)
-        
-        for i, rel_path in enumerate(unique_rel_paths):
-            print(f"{i+1:4d}. {rel_path}")
-        
-        print(f"\n合計: {len(unique_rel_paths)} 個のユニークなパス")
-        return True
-    except Exception as e:
-        print(f"エラー: キャッシュエントリパス表示に失敗しました: {e}")
-        if debug_mode:
-            traceback.print_exc()
-        return False
+    # 検索パスの準備（末尾のスラッシュを確保）
+    search_path = path if path.endswith('/') or not path else path + '/'
+    search_path_len = len(search_path) if search_path != '/' else 0
+    
+    # 現在のディレクトリのエントリを収集
+    current_dir_entries = []
+    
+    # キャッシュから直接の子エントリを検索
+    for entry_path, entry in cache.items():
+        if path == '':  # ルート
+            if '/' not in entry_path:
+                current_dir_entries.append(entry)
+        else:  # 特定のディレクトリ
+            if entry_path.startswith(search_path):
+                remaining_path = entry_path[search_path_len:]
+                if '/' not in remaining_path:  # 直接の子のみ
+                    current_dir_entries.append(entry)
+    
+    # エントリを表示
+    for entry in sorted(current_dir_entries, key=lambda e: e.name):
+        if entry.type.name == "DIRECTORY":
+            print(f"{prefix}{entry.name}/")
+            # 再帰的に子を表示
+            next_path = f"{path}/{entry.name}" if path else entry.name
+            show_cached_recursive(manager, next_path, prefix + "  ")
+        elif entry.type.name == "ARCHIVE":
+            print(f"{prefix}{entry.name} [アーカイブ]")
+        else:
+            print(f"{prefix}{entry.name}")
 
 
 def parse_command_args(args_str: str) -> str:
@@ -746,7 +775,7 @@ def main():
             elif cmd == '?':
                 print_help()
             elif cmd == 'RR':
-                show_cached_entry_paths()
+                show_cached_entry_paths(manager)
                 continue
             elif cmd == 'RC':
                 show_cached_entries()

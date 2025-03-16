@@ -1,0 +1,29 @@
+# SupraView プロジェクト必要パッケージ
+
+# アーカイブ操作
+py7zr>=0.20.5
+rarfile>=4.0
+zipfile36; python_version < '3.6'
+pyunpack>=0.3.0
+patool>=1.12
+
+# GUI
+PySide6>=6.5.0  # Qt GUI基本ライブラリ
+
+# イメージ処理
+Pillow>=9.0.0  # 画像プレビュー・処理用
+
+# 一般ユーティリティ
+chardet>=5.0.0
+
+# コア依存パッケージ
+numpy>=1.20.0
+opencv-python>=4.5.0
+charset-normalizer>=3.0.0
+
+# Dashビューア用パッケージ
+dash>=2.0.0
+dash-bootstrap-components>=1.0.0
+
+# 開発ツール (オプション)
+pytest>=6.0.0

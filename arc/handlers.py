@@ -26,7 +26,7 @@ def register_standard_handlers(manager: ArchiveManager) -> None:
     
     # ZIPハンドラ
     try:
-        from .handler.zip_handler import ZipHandler  # インポートパス修正
+        from .handler.zip_handler import ZipHandler
         print("ZipHandler登録中...")
         zip_handler = ZipHandler()
         manager.register_handler(zip_handler)
@@ -35,7 +35,7 @@ def register_standard_handlers(manager: ArchiveManager) -> None:
     
     # RARハンドラ
     try:
-        from .handler.rar_handler import RarHandler  # インポートパス修正
+        from .handler.rar_handler import RarHandler
         print("RarHandler登録中...")
         rar_handler = RarHandler()
         manager.register_handler(rar_handler)
