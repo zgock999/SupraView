@@ -6,42 +6,42 @@ PySide6ベースのGUIアプリケーション。
 ネスト化されたアーカイブファイルにも対応。
 """
 
+# 標準ライブラリ
 import os
 import sys
 import traceback
-from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
+from typing import List, Optional, Dict, Any, Tuple
+import argparse  # コマンドライン引数解析用に追加
 
 # 親パッケージからインポートできるようにパスを調整
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-# PySide6のインポート
+# ロギングシステム
+from logutils import setup_logging, log_print, log_trace, DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# サードパーティライブラリ（PySide6）
+from PySide6.QtCore import (
+    Qt, QDir, QModelIndex, QItemSelectionModel, Signal, Slot,
+    QObject, QSize, QUrl, QMimeData, QByteArray
+)
+from PySide6.QtGui import (
+    QAction, QIcon, QStandardItemModel, QStandardItem, QKeySequence,
+    QDragEnterEvent, QDropEvent, QResizeEvent
+)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter, QTreeView, QFileSystemModel,
     QVBoxLayout, QHBoxLayout, QWidget, QLabel, QMessageBox,
     QPushButton, QToolBar, QStatusBar, QFileDialog, QMenu, QHeaderView,
     QStyle
 )
-from PySide6.QtCore import (
-    Qt, QDir, QModelIndex, QItemSelectionModel, Signal, Slot,
-    QObject, QSize, QUrl, QMimeData, QByteArray
-)
-from PySide6.QtGui import (
-    QIcon, QStandardItemModel, QStandardItem, QKeySequence,
-    QDragEnterEvent, QDropEvent, QResizeEvent,
-    QAction  # QActionはQtGuiからインポート
-)
 
-# アーカイブマネージャーのインポート
-from arc.interface import get_archive_manager  # interfaceモジュールからインポート
+# アプリケーション固有のモジュール
 from arc.arc import EntryInfo, EntryType
+from arc.interface import get_archive_manager
 from arc.manager.enhanced import EnhancedArchiveManager
-
-# プレビューウィジェットのインポート
-from arc.viewer.preview import FilePreviewWidget
-
-# 画像ビューアーのインポート
 from arc.viewer.imageviewer import ImageViewerWindow
+from arc.viewer.preview import FilePreviewWidget
     
 
 class ArchiveViewModel(QStandardItemModel):
@@ -69,17 +69,17 @@ class ArchiveViewModel(QStandardItemModel):
             self.setHorizontalHeaderLabels(["名前", "サイズ", "種類", "更新日時"])
             
             self._current_path = path
-            print(f"ViewModel: 相対パス '{path}' のエントリを読み込みます")
+            log_print(INFO, f"ViewModel: 相対パス '{path}' のエントリを読み込みます")
             
             # アーカイブマネージャーからエントリを取得
             # 注: manager.current_pathからの相対パスとして処理される
             entries = self._manager.list_entries(path)
             
             if not entries:
-                print(f"ViewModel: パス '{path}' にエントリがありません")
+                log_print(WARNING, f"ViewModel: パス '{path}' にエントリがありません")
                 return False
                 
-            print(f"ViewModel: {len(entries)} エントリを読み込みました")
+            log_print(INFO, f"ViewModel: {len(entries)} エントリを読み込みました")
             
             # エントリをモデルに追加
             for entry in sorted(entries, key=lambda e: (e.type.value, e.name)):
@@ -88,7 +88,7 @@ class ArchiveViewModel(QStandardItemModel):
             return True
             
         except Exception as e:
-            print(f"ViewModel エラー: {e}")
+            log_print(ERROR, f"ViewModel エラー: {e}")
             traceback.print_exc()
             return False
     
@@ -426,7 +426,7 @@ class ArchiveViewerWindow(QMainWindow):
         Args:
             relative_path: current_pathからの相対パス
         """
-        print(f"相対パス '{relative_path}' に移動します")
+        log_print(INFO, f"相対パス '{relative_path}' に移動します")
         
         # パスを正規化
         relative_path = relative_path.replace('\\', '/')
@@ -486,7 +486,7 @@ class ArchiveViewerWindow(QMainWindow):
                 self.setWindowTitle(f"SupraView - {base_name}")
             
         except Exception as e:
-            print(f"ナビゲーションエラー: {e}")
+            log_print(ERROR, f"ナビゲーションエラー: {e}")
             traceback.print_exc()
             QMessageBox.critical(
                 self, 
@@ -542,7 +542,7 @@ class ArchiveViewerWindow(QMainWindow):
             # スラッシュが先頭にあるか、見つからない場合はルート
             parent_path = ""
             
-        print(f"親ディレクトリへ移動: {path} -> {parent_path}")
+        log_print(INFO, f"親ディレクトリへ移動: {path} -> {parent_path}")
         
         # 親パスへ移動
         self._navigate_to(parent_path)
@@ -673,7 +673,7 @@ class ArchiveViewerWindow(QMainWindow):
             )
             
         except Exception as e:
-            print(f"抽出エラー: {e}")
+            log_print(ERROR, f"抽出エラー: {e}")
             traceback.print_exc()
             QMessageBox.critical(
                 self,
@@ -714,7 +714,7 @@ class ArchiveViewerWindow(QMainWindow):
                 content = self._manager.read_file(entry_rel_path)
                 
                 if content is None:
-                    print(f"ファイル '{entry.name}' の読み込みに失敗しました")
+                    log_print(ERROR, f"ファイル '{entry.name}' の読み込みに失敗しました")
                     error_count += 1
                     continue
                     
@@ -738,7 +738,7 @@ class ArchiveViewerWindow(QMainWindow):
                 success_count += 1
                 
             except Exception as e:
-                print(f"抽出エラー ({entry.name}): {e}")
+                log_print(ERROR, f"抽出エラー ({entry.name}): {e}")
                 error_count += 1
         
         # 結果を表示
@@ -791,7 +791,7 @@ class ArchiveViewerWindow(QMainWindow):
             
             # マネージャーにcurrent_pathを設定（EnhancedArchiveManagerの場合）
             if isinstance(self._manager, EnhancedArchiveManager):
-                print(f"マネージャーに現在のパスを設定: {path}")
+                log_print(INFO, f"マネージャーに現在のパスを設定: {path}")
                 self._manager.set_current_path(path)
             
             # 相対パスをリセット（ルートから開始）
@@ -816,7 +816,7 @@ class ArchiveViewerWindow(QMainWindow):
             return True
             
         except Exception as e:
-            print(f"アーカイブ設定エラー: {e}")
+            log_print(ERROR, f"アーカイブ設定エラー: {e}")
             traceback.print_exc()
             QMessageBox.critical(
                 self,
@@ -857,7 +857,21 @@ class ArchiveViewerWindow(QMainWindow):
 
 def main():
     """メイン関数"""
+    # コマンドライン引数の解析
+    parser = argparse.ArgumentParser(description="アーカイブビューワー")
+    parser.add_argument('archive', nargs='?', help="開くアーカイブファイルのパス")
+    parser.add_argument('--debug', action='store_true', help="デバッグモードを有効化")
+    
+    args = parser.parse_args()
+    
     app = QApplication(sys.argv)
+    
+    # ロギングシステムの初期化（デフォルトはERRORレベル）
+    log_level = DEBUG if args.debug else ERROR
+    setup_logging(log_level)
+    
+    if args.debug:
+        log_print(DEBUG, "デバッグモードで起動しました")
     
     # スタイルの設定
     app.setStyle('Fusion')
@@ -867,8 +881,8 @@ def main():
     window.show()
     
     # コマンドライン引数で指定されたファイルを開く
-    if len(sys.argv) > 1:
-        window._set_archive_path(sys.argv[1])
+    if args.archive:
+        window._set_archive_path(args.archive)
     
     # イベントループを開始
     sys.exit(app.exec())
