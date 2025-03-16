@@ -48,6 +48,7 @@ class FileSystemHandler(ArchiveHandler):
             extensions: アーカイブファイル拡張子のリスト
         """
         self.KNOWN_ARCHIVE_EXTENSIONS = extensions
+        self.debug_info(f"アーカイブ拡張子を設定: {extensions}")
         
     def can_handle(self, path: str) -> bool:
         """
@@ -64,7 +65,10 @@ class FileSystemHandler(ArchiveHandler):
         
         try:
             # パスが物理的に存在するかチェック
-            return os.path.exists(abs_path)
+            exists = os.path.exists(abs_path)
+            if not exists:
+                self.debug_debug(f"パスが存在しません: {abs_path}")
+            return exists
         except (OSError, ValueError):
             return False
     
@@ -87,11 +91,11 @@ class FileSystemHandler(ArchiveHandler):
                 # 部分一致検索を試みる
                 fuzzy_entries = self._fuzzy_match_entries(abs_path)
                 if fuzzy_entries:
-                    print(f"FileSystemHandler: パスを部分一致で検索しました: {abs_path} -> {len(fuzzy_entries)} エントリ")
+                    self.debug_info(f"パスを部分一致で検索しました: {abs_path} -> {len(fuzzy_entries)} エントリ")
                     return fuzzy_entries
                 
                 # 見つからなければ空のリストを返す
-                print(f"FileSystemHandler: パスが見つかりません: {abs_path}")
+                self.debug_warning(f"パスが見つかりません: {abs_path}")
                 return []
             
             # ディレクトリが存在するか確認
@@ -105,7 +109,7 @@ class FileSystemHandler(ArchiveHandler):
                             _, ext = os.path.splitext(abs_path.lower())
                             if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
                                 entry.type = EntryType.ARCHIVE
-                                print(f"FileSystemHandler: ファイル {abs_path} をARCHIVEタイプに修正")
+                                self.debug_info(f"ファイル {abs_path} をARCHIVEタイプに修正")
                         return [entry]
                     
                 return []
@@ -151,13 +155,13 @@ class FileSystemHandler(ArchiveHandler):
                         )
                         entries.append(entry_info)
                     except (OSError, PermissionError) as e:
-                        print(f"エントリの読み取りエラー: {entry.path}, {e}")
+                        self.debug_warning(f"エントリの読み取りエラー: {entry.path}, {e}")
                         continue
                 
             return entries
             
         except (OSError, PermissionError) as e:
-            print(f"ディレクトリの読み取りエラー: {abs_path}, {e}")
+            self.debug_error(f"ディレクトリの読み取りエラー: {abs_path}, {e}", trace=True)
             return []
     
     def _fuzzy_match_entries(self, path: str) -> List[EntryInfo]:
@@ -253,7 +257,7 @@ class FileSystemHandler(ArchiveHandler):
                             results.append(entry)
             
         except Exception as e:
-            print(f"FileSystemHandler: 部分一致検索エラー: {e}")
+            self.debug_error(f"部分一致検索エラー: {e}", trace=True)
             
         return results
     
@@ -272,6 +276,7 @@ class FileSystemHandler(ArchiveHandler):
         try:
             # パスが存在するか確認
             if not os.path.exists(abs_path):
+                self.debug_warning(f"パスが存在しません: {abs_path}")
                 return None
             
             # 基本情報を取得
@@ -315,7 +320,7 @@ class FileSystemHandler(ArchiveHandler):
             )
             
         except (OSError, PermissionError) as e:
-            print(f"エントリ情報取得エラー: {abs_path}, {e}")
+            self.debug_error(f"エントリ情報取得エラー: {abs_path}, {e}", trace=True)
             return None
     
     def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
@@ -337,28 +342,28 @@ class FileSystemHandler(ArchiveHandler):
             if norm_file_path:
                 # サブパスが指定されている場合は結合
                 full_path = os.path.join(norm_archive_path, norm_file_path).replace('\\', '/')
-                print(f"FileSystemHandler: 結合パスからファイル読み込み: {full_path}")
+                self.debug_info(f"結合パスからファイル読み込み: {full_path}")
             else:
                 # サブパスが空の場合はarchive_path自体を読み込む
                 full_path = norm_archive_path
-                print(f"FileSystemHandler: 単一パスからファイル読み込み: {full_path}")
+                self.debug_info(f"単一パスからファイル読み込み: {full_path}")
             
             # 絶対パスに変換
             abs_path = self._to_absolute_path(full_path)
             
             # ファイルが存在し、通常のファイルであるか確認
             if not os.path.isfile(abs_path):
-                print(f"FileSystemHandler: パス {abs_path} はファイルではありません")
+                self.debug_warning(f"パス {abs_path} はファイルではありません")
                 return None
             
             # ファイルを読み込む
             with open(abs_path, 'rb') as f:
                 content = f.read()
-                print(f"FileSystemHandler: {len(content):,} バイトを読み込みました")
+                self.debug_info(f"{len(content):,} バイトを読み込みました")
                 return content
                 
         except (OSError, PermissionError) as e:
-            print(f"FileSystemHandler: ファイル読み込みエラー: {e}")
+            self.debug_error(f"ファイル読み込みエラー: {e}", trace=True)
             return None
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
@@ -376,14 +381,16 @@ class FileSystemHandler(ArchiveHandler):
         try:
             # ファイルが存在し、通常のファイルであるか確認
             if not os.path.isfile(abs_path):
+                self.debug_warning(f"パス {abs_path} はファイルではありません")
                 return None
             
             # ファイルストリームを開く
             # 注: 呼び出し元はこのストリームをcloseする責任がある
+            self.debug_info(f"ファイルストリームを開きました: {abs_path}")
             return open(abs_path, 'rb')
                 
         except (OSError, PermissionError) as e:
-            print(f"ファイルストリーム取得エラー: {abs_path}, {e}")
+            self.debug_error(f"ファイルストリーム取得エラー: {abs_path}, {e}", trace=True)
             return None
 
     def get_parent_path(self, path: str) -> str:
@@ -444,11 +451,11 @@ class FileSystemHandler(ArchiveHandler):
         else:
             abs_path = self._to_absolute_path(path)
         
-        print(f"FileSystemHandler: list_all_entries 開始 - パス: {abs_path}")
+        self.debug_info(f"list_all_entries 開始 - パス: {abs_path}")
         
         # ディレクトリが存在するか確認
         if not os.path.isdir(abs_path):
-            print(f"FileSystemHandler: ディレクトリが存在しません: {abs_path}")
+            self.debug_warning(f"ディレクトリが存在しません: {abs_path}")
             return []
         
         # すべてのエントリを格納するリスト
@@ -479,7 +486,7 @@ class FileSystemHandler(ArchiveHandler):
                     modified_time=None
                 )
                 all_entries.append(root_entry)
-                print(f"FileSystemHandler: ルートディレクトリエントリを追加: {root_name} ({abs_path})")
+                self.debug_info(f"ルートディレクトリエントリを追加: {root_name} ({abs_path})")
             
             # ディレクトリを再帰的に走査
             for root, dirs, files in os.walk(abs_path):
@@ -517,7 +524,7 @@ class FileSystemHandler(ArchiveHandler):
                         all_entries.append(entry)
                         
                     except Exception as e:
-                        print(f"FileSystemHandler: ディレクトリ情報取得エラー: {dir_path} - {e}")
+                        self.debug_warning(f"ディレクトリ情報取得エラー: {dir_path} - {e}")
                         # 最小限の情報でエントリを作成して追加
                         rel_path = self.to_relative_path(dir_path)
                         all_entries.append(self.create_entry_info(
@@ -561,7 +568,7 @@ class FileSystemHandler(ArchiveHandler):
                         all_entries.append(entry)
                         
                     except Exception as e:
-                        print(f"FileSystemHandler: ファイル情報取得エラー ({file_path}): {e}")
+                        self.debug_warning(f"ファイル情報取得エラー ({file_path}): {e}")
                         # エラーが発生しても最低限の情報でエントリを追加
                         rel_path = self.to_relative_path(file_path)
                         all_entries.append(self.create_entry_info(
@@ -572,11 +579,11 @@ class FileSystemHandler(ArchiveHandler):
                             size=0
                         ))
             
-            print(f"FileSystemHandler: {len(all_entries)} エントリを取得しました")
+            self.debug_info(f"{len(all_entries)} エントリを取得しました")
             return all_entries
             
         except Exception as e:
-            print(f"FileSystemHandler: エントリ一覧取得中にエラー: {e}")
+            self.debug_error(f"エントリ一覧取得中にエラー: {e}", trace=True)
             import traceback
             traceback.print_exc()
             return all_entries if all_entries else []
@@ -594,7 +601,7 @@ class FileSystemHandler(ArchiveHandler):
         Returns:
             常に空リスト
         """
-        print(f"FileSystemHandler: メモリデータからのエントリ取得はサポートしていません")
+        self.debug_warning(f"メモリデータからのエントリ取得はサポートしていません")
         return []
 
     def use_absolute(self) -> bool:

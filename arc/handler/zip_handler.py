@@ -98,8 +98,7 @@ class ZipHandler(ArchiveHandler):
                 # 共通処理メソッドを呼び出し
                 return self._process_entries(zf, path, zip_path, internal_path, from_memory=False)
         except Exception as e:
-            print(f"ZIPエントリ列挙エラー: {str(e)}")
-            traceback.print_exc()
+            self.debug_error(f"ZIPエントリ列挙エラー: {str(e)}", trace=True)
             return None
     
     def _process_entries(self, zip_file: Union[zipfile.ZipFile, io.BytesIO], 
@@ -127,8 +126,8 @@ class ZipHandler(ArchiveHandler):
         structure = self._get_zip_structure(archive_path, zip_file)
         
         # デバッグ情報：内部パスと構造の確認
-        print(f"ZIPハンドラ list_entries: 処理する内部パス [{internal_path}]")
-        print(f"ZIPハンドラ list_entries: 構造キーの一部: {list(structure.keys())[:5]}")
+        self.debug_info(f"ZIPハンドラ list_entries: 処理する内部パス [{internal_path}]")
+        self.debug_info(f"ZIPハンドラ list_entries: 構造キーの一部: {list(structure.keys())[:5]}")
         
         # 要求されたパスの正規化
         if internal_path and not internal_path.endswith('/'):
@@ -137,25 +136,25 @@ class ZipHandler(ArchiveHandler):
         # 指定されたディレクトリが存在するか確認
         if internal_path not in structure:
             if internal_path:  # ルートでなければ、類似パスを探す
-                print(f"ZIPハンドラ: 内部パス '{internal_path}' が構造内に見つかりません")
+                self.debug_info(f"ZIPハンドラ: 内部パス '{internal_path}' が構造内に見つかりません")
                 
                 # 末尾のスラッシュ有無で正規化したパスで検索
                 normalized_path = internal_path.rstrip('/')
                 for struct_path in structure.keys():
                     struct_normalized = struct_path.rstrip('/')
                     if normalized_path == struct_normalized:
-                        print(f"ZIPハンドラ: 正規化したパスが一致: {struct_path}")
+                        self.debug_info(f"ZIPハンドラ: 正規化したパスが一致: {struct_path}")
                         internal_path = struct_path
                         break
                 else:
                     # 前方一致で探す（親ディレクトリ判定のため）
                     for struct_path in structure.keys():
                         if struct_path.startswith(internal_path):
-                            print(f"ZIPハンドラ: 前方一致するパスが見つかりました: {struct_path}")
+                            self.debug_info(f"ZIPハンドラ: 前方一致するパスが見つかりました: {struct_path}")
                             internal_path = struct_path
                             break
                     else:
-                        print(f"ZIPハンドラ: 類似パスも見つかりません")
+                        self.debug_info(f"ZIPハンドラ: 類似パスも見つかりません")
                         return []
             else:
                 internal_path = ''  # ルートの場合は空文字に正規化
@@ -199,11 +198,11 @@ class ZipHandler(ArchiveHandler):
                             file_info = zip_file.getinfo(orig_path)
                         except KeyError:
                             # どちらでも見つからなければ次のファイルへ
-                            print(f"  ファイル情報取得失敗: {file_path_in_zip}")
+                            self.debug_info(f"  ファイル情報取得失敗: {file_path_in_zip}")
                             continue
                     else:
                         # 元の名前がなく、かつ変換後の名前でも見つからなければ次へ
-                        print(f"  ファイル情報取得失敗: {file_path_in_zip}")
+                        self.debug_info(f"  ファイル情報取得失敗: {file_path_in_zip}")
                         continue
                 
                 # タイムスタンプを変換
@@ -231,7 +230,7 @@ class ZipHandler(ArchiveHandler):
                 result_entries.append(entry)
             except Exception as e:
                 # エラーが発生しても最低限の情報でエントリを追加
-                print(f"ZIPファイル情報取得エラー: {file_path_in_zip}, {str(e)}")
+                self.debug_error(f"ZIPファイル情報取得エラー: {file_path_in_zip}, {str(e)}")
                 result_entries.append(self.create_entry_info(
                     name=file_name,
                     abs_path=file_path,
@@ -241,8 +240,8 @@ class ZipHandler(ArchiveHandler):
                 ))
         
         # デバッグ情報
-        print(f"ZIPハンドラ: {original_path} で {len(result_entries)} エントリを発見")
-        print(f"  内訳: {sum(1 for e in result_entries if e.type == EntryType.FILE)} ファイル, " 
+        self.debug_info(f"ZIPハンドラ: {original_path} で {len(result_entries)} エントリを発見")
+        self.debug_info(f"  内訳: {sum(1 for e in result_entries if e.type == EntryType.FILE)} ファイル, " 
               f"{sum(1 for e in result_entries if e.type == EntryType.DIRECTORY)} ディレクトリ")
         
         return result_entries
@@ -269,7 +268,7 @@ class ZipHandler(ArchiveHandler):
                 zf = zipfile.ZipFile(zip_path, 'r')
                 should_close = True
             except Exception as e:
-                print(f"ZIPファイル解析エラー: {str(e)}, パス: {zip_path}")
+                self.debug_error(f"ZIPファイル解析エラー: {str(e)}, パス: {zip_path}")
                 return {}
                 
         # BytesIOオブジェクトからZipFileを取得する場合
@@ -278,14 +277,14 @@ class ZipHandler(ArchiveHandler):
                 zf = zipfile.ZipFile(zf)
                 should_close = True
             except Exception as e:
-                print(f"ZIPファイル解析エラー（BytesIOから）: {str(e)}")
+                self.debug_error(f"ZIPファイル解析エラー（BytesIOから）: {str(e)}")
                 return {}
                 
         try:
             # ディレクトリ構造を初期化 - file_mapを追加して元ファイル名と変換後のファイル名のマッピングを保存
             structure = {'': {'dirs': set(), 'files': set(), 'file_map': {}}}
             
-            print(f"ZIPファイル解析: {zip_path} の構造を構築します")
+            self.debug_info(f"ZIPファイル解析: {zip_path} の構造を構築します")
             
             # エンコーディングを試す順序（一般的な日本語環境向け）
             encodings_to_try = ['cp932', 'utf-8', 'euc_jp', 'iso-2022-jp', 'cp437']
@@ -313,7 +312,7 @@ class ZipHandler(ArchiveHandler):
                                 continue
                 except Exception as e:
                     # どんな例外が発生してもオリジナルのファイル名を使用
-                    print(f"  ファイル名エンコーディング処理エラー: {e}")
+                    self.debug_error(f"  ファイル名エンコーディング処理エラー: {e}")
                     name = info.filename
                     original_name = name
                 
@@ -424,9 +423,9 @@ class ZipHandler(ArchiveHandler):
                     structure[dir_path]['file_map'][file_name] = original_file_name
             
             # 結果を報告
-            print(f"ZIPファイル解析完了: {zip_path}, {len(structure)} ディレクトリエントリ")
+            self.debug_info(f"ZIPファイル解析完了: {zip_path}, {len(structure)} ディレクトリエントリ")
             for dir_path, contents in structure.items():
-                print(f"  ディレクトリ: {dir_path}: {len(contents['dirs'])} サブディレクトリ, {len(contents['files'])} ファイル")
+                self.debug_info(f"  ディレクトリ: {dir_path}: {len(contents['dirs'])} サブディレクトリ, {len(contents['files'])} ファイル")
                 
                 # マッピング情報の出力（デバッグ用）
                 mapping_count = 0
@@ -434,10 +433,10 @@ class ZipHandler(ArchiveHandler):
                     if display_name != original_name:
                         mapping_count += 1
                         if mapping_count <= 5:  # 最大5件のみ表示
-                            print(f"    マッピング: {display_name} -> {original_name}")
+                            self.debug_info(f"    マッピング: {display_name} -> {original_name}")
                 
                 if mapping_count > 5:
-                    print(f"    ...他 {mapping_count - 5} 件のマッピング")
+                    self.debug_info(f"    ...他 {mapping_count - 5} 件のマッピング")
             
             # キャッシュに追加
             self.structure_cache[zip_path] = structure
@@ -534,10 +533,10 @@ class ZipHandler(ArchiveHandler):
                         with zf.open(internal_path) as f:
                             return f.read()
                     except KeyError:
-                        print(f"ZIPファイル内のファイルが見つかりません: {internal_path}")
+                        self.debug_info(f"ZIPファイル内のファイルが見つかりません: {internal_path}")
                         return None
         except Exception as e:
-            print(f"ZIPファイルの読み込みでエラー: {str(e)}")
+            self.debug_error(f"ZIPファイルの読み込みでエラー: {str(e)}", trace=True)
             return None
     
     def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
@@ -554,10 +553,10 @@ class ZipHandler(ArchiveHandler):
         try:
             # アーカイブパスがZIPファイルであることを確認
             if not os.path.isfile(archive_path) or not archive_path.lower().endswith(tuple(self.supported_extensions)):
-                print(f"指定されたパスはZIPファイルではありません: {archive_path}")
+                self.debug_error(f"指定されたパスはZIPファイルではありません: {archive_path}")
                 return None
                 
-            print(f"ZIPファイル内のファイル読み込み: {archive_path} -> {file_path}")
+            self.debug_info(f"ZIPファイル内のファイル読み込み: {archive_path} -> {file_path}")
             
             # ファイルパスを正規化
             norm_file_path = file_path.replace('\\', '/')
@@ -578,41 +577,40 @@ class ZipHandler(ArchiveHandler):
                     name_in_arc = structure[dir_path]['file_map'].get(file_name, file_name)
                     if name_in_arc != file_name:
                         actual_path = dir_path + name_in_arc
-                        print(f"  実際のパスを使用: {norm_file_path} -> {actual_path}")
+                        self.debug_info(f"  実際のパスを使用: {norm_file_path} -> {actual_path}")
                 
                 # ファイルの存在確認
                 try:
                     with zip_file.open(actual_path) as f:
                         content = f.read()
-                        print(f"  ファイルを読み込みました: {len(content)} バイト")
+                        self.debug_info(f"  ファイルを読み込みました: {len(content)} バイト")
                         return content
                 except KeyError:
                     # 元のパスでも試す
                     try:
                         with zip_file.open(norm_file_path) as f:
                             content = f.read()
-                            print(f"  元のパスでファイルを読み込みました: {len(content)} バイト")
+                            self.debug_info(f"  元のパスでファイルを読み込みました: {len(content)} バイト")
                             return content
                     except KeyError:
                         # 直接一致しない場合、すべてのエントリを検索
                         for info in zip_file.infolist():
                             try:
                                 if self.normalize_path(info.filename) == self.normalize_path(norm_file_path):
-                                    print(f"ZIPファイル内のファイルを読み込み: {info.filename}")
+                                    self.debug_info(f"ZIPファイル内のファイルを読み込み: {info.filename}")
                                     return zip_file.read(info.filename)
                             except:
                                 # normalize_pathメソッドがない場合
                                 if info.filename.replace('\\', '/') == norm_file_path:
-                                    print(f"ZIPファイル内のファイルを読み込み: {info.filename}")
+                                    self.debug_info(f"ZIPファイル内のファイルを読み込み: {info.filename}")
                                     return zip_file.read(info.filename)
 
-                        print(f"  ファイルが見つかりません: {norm_file_path}")
-                        print(f"  ZIP内のファイル一覧: {[info.filename for info in zip_file.infolist()[:10]]}")
+                        self.debug_warning(f"  ファイルが見つかりません: {norm_file_path}")
+                        self.debug_warning(f"  ZIP内のファイル一覧: {[info.filename for info in zip_file.infolist()[:10]]}")
                         return None
                         
         except Exception as e:
-            print(f"ZIPアーカイブ内のファイル読み込みエラー: {e}")
-            traceback.print_exc()
+            self.debug_error(f"ZIPアーカイブ内のファイル読み込みエラー: {e}", trace=True)
             return None
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
@@ -644,8 +642,7 @@ class ZipHandler(ArchiveHandler):
                 
             return None
         except Exception as e:
-            print(f"ファイルストリーム取得エラー: {e}")
-            traceback.print_exc()
+            self.debug_error(f"ファイルストリーム取得エラー: {e}", trace=True)
             return None
 
     def list_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
@@ -663,30 +660,29 @@ class ZipHandler(ArchiveHandler):
             if not self.can_handle_bytes(archive_data):
                 return []
                 
-            print(f"ZipHandler: メモリデータからエントリリストを取得中 ({len(archive_data)} バイト)")
+            self.debug_info(f"ZipHandler: メモリデータからエントリリストを取得中 ({len(archive_data)} バイト)")
             
             # 内部パスが指定されている場合、name_in_arcの考慮が必要
             internal_path = path
             if internal_path:
                 # パスを正規化
                 internal_path = internal_path.replace('\\', '/')
-                print(f"ZipHandler: 内部パスが指定されています: {internal_path}")
+                self.debug_info(f"ZipHandler: 内部パスが指定されています: {internal_path}")
                 
                 # ディレクトリパスの末尾にスラッシュを追加（一貫性のため）
                 if not internal_path.endswith('/') and self.is_directory_path(internal_path):
                     internal_path += '/'
-                    print(f"ZipHandler: ディレクトリパスに末尾スラッシュを追加: {internal_path}")
+                    self.debug_info(f"ZipHandler: ディレクトリパスに末尾スラッシュを追加: {internal_path}")
             
             # メモリ上のZIPを開く
             bytes_io = io.BytesIO(archive_data)
             with zipfile.ZipFile(bytes_io) as zf:
                 # 共通処理メソッドを呼び出し
                 entries = self._process_entries(zf, path, "memory_zip", internal_path, from_memory=True)
-                print(f"ZipHandler: メモリデータから {len(entries)} 個のエントリを取得")
+                self.debug_info(f"ZipHandler: メモリデータから {len(entries)} 個のエントリを取得")
                 return entries
         except Exception as e:
-            print(f"ZipHandler: メモリデータからのエントリリスト取得エラー: {e}")
-            traceback.print_exc()
+            self.debug_error(f"ZipHandler: メモリデータからのエントリリスト取得エラー: {e}", trace=True)
             return []
 
     def is_directory_path(self, path: str) -> bool:
@@ -729,7 +725,7 @@ class ZipHandler(ArchiveHandler):
         try:
             # ファイルパスを正規化
             norm_file_path = file_path.replace('\\', '/')
-            print(f"ZipHandler: メモリからファイル読み込み: {norm_file_path}")
+            self.debug_info(f"ZipHandler: メモリからファイル読み込み: {norm_file_path}")
             
             # メモリ上でZIPを開く
             with zipfile.ZipFile(io.BytesIO(archive_data)) as zip_file:
@@ -748,7 +744,7 @@ class ZipHandler(ArchiveHandler):
                     name_in_arc = structure[dir_path]['file_map'].get(file_name, file_name)
                     if name_in_arc != file_name:
                         actual_path = dir_path + name_in_arc
-                        print(f"  実際のパスを使用: {norm_file_path} -> {actual_path}")
+                        self.debug_info(f"  実際のパスを使用: {norm_file_path} -> {actual_path}")
                 
                 try:
                     # 実際のパスでファイルを読み込む
@@ -761,20 +757,19 @@ class ZipHandler(ArchiveHandler):
                         # 直接一致しない場合、すべてのエントリを検索
                         for info in zip_file.infolist():
                             if info.filename.replace('\\', '/') == norm_file_path:
-                                print(f"  完全一致するファイル名を発見: {info.filename}")
+                                self.debug_info(f"  完全一致するファイル名を発見: {info.filename}")
                                 return zip_file.read(info.filename)
                             
                             # ファイル名部分だけで比較
                             if os.path.basename(info.filename) == file_name:
-                                print(f"  ファイル名部分が一致: {info.filename}")
+                                self.debug_info(f"  ファイル名部分が一致: {info.filename}")
                                 return zip_file.read(info.filename)
                                 
-                        print(f"  ファイルが見つかりません: {norm_file_path}")
-                        print(f"  ZIP内のファイル一覧: {[info.filename for info in zip_file.infolist()[:10]]}")
+                        self.debug_warning(f"  ファイルが見つかりません: {norm_file_path}")
+                        self.debug_warning(f"  ZIP内のファイル一覧: {[info.filename for info in zip_file.infolist()[:10]]}")
                         return None
         except Exception as e:
-            print(f"ZipHandler.read_file_from_bytes エラー: {e}")
-            traceback.print_exc()
+            self.debug_error(f"ZipHandler.read_file_from_bytes エラー: {e}", trace=True)
             return None
 
     def _is_archive_by_extension(self, filename: str) -> bool:
@@ -865,19 +860,18 @@ class ZipHandler(ArchiveHandler):
             
             # ZIPファイルが見つからなければ無効
             if not zip_path:
-                print(f"警告: ZIPファイルが見つかりません: {norm_path}")
+                self.debug_warning(f"警告: ZIPファイルが見つかりません: {norm_path}")
                 return "", ""
             
             # 内部パスを結合
             internal_path = '/'.join(internal_path_parts)
             
             # デバッグ出力を追加
-            print(f"ZIPパス分解: {norm_path} → ZIP:{zip_path}, 内部:{internal_path}")
+            self.debug_info(f"ZIPパス分解: {norm_path} → ZIP:{zip_path}, 内部:{internal_path}")
             
             return zip_path, internal_path
         except Exception as e:
-            print(f"ZIPパス分解エラー: {str(e)}, パス: {path}")
-            traceback.print_exc()
+            self.debug_error(f"ZIPパス分解エラー: {str(e)}, パス: {path}", trace=True)
             return "", ""
 
     def needs_encoding_conversion(self) -> bool:
@@ -907,12 +901,12 @@ class ZipHandler(ArchiveHandler):
         zip_path, internal_path = self._split_path(path)
         
         if not zip_path or not os.path.isfile(zip_path):
-            print(f"ZipHandler: 有効なZIPファイルが見つかりません: {path}")
+            self.debug_warning(f"ZipHandler: 有効なZIPファイルが見つかりません: {path}")
             return []
         
         # 内部パスが指定されている場合はエラー（このメソッドではアーカイブ全体を対象とする）
         if internal_path:
-            print(f"ZipHandler: list_all_entriesでは内部パスを指定できません。アーカイブ全体が対象です: {path}")
+            self.debug_warning(f"ZipHandler: list_all_entriesでは内部パスを指定できません。アーカイブ全体が対象です: {path}")
             # 内部パスを無視してアーカイブファイル全体を処理
         
         # すべてのエントリを格納するリスト
@@ -953,7 +947,7 @@ class ZipHandler(ArchiveHandler):
                                     continue
                     except Exception as e:
                         # どんな例外が発生してもオリジナルのファイル名を使用
-                        print(f"  ファイル名エンコーディング処理エラー: {e}")
+                        self.debug_error(f"  ファイル名エンコーディング処理エラー: {e}")
                         name = info.filename
                         original_name = name
                     
@@ -996,13 +990,11 @@ class ZipHandler(ArchiveHandler):
                             modified_time=timestamp
                         ))
                         
-            print(f"ZipHandler: {zip_path} 内の全エントリ数: {len(all_entries)}")
+            self.debug_info(f"ZipHandler: {zip_path} 内の全エントリ数: {len(all_entries)}")
             return all_entries
             
         except Exception as e:
-            print(f"ZipHandler: 全エントリ取得中にエラーが発生しました: {e}")
-            import traceback
-            traceback.print_exc()
+            self.debug_error(f"ZipHandler: 全エントリ取得中にエラーが発生しました: {e}", trace=True)
             return []
 
     def list_all_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
@@ -1018,10 +1010,10 @@ class ZipHandler(ArchiveHandler):
         """
         try:
             if not self.can_handle_bytes(archive_data):
-                print(f"ZipHandler: このバイトデータは処理できません")
+                self.debug_warning(f"ZipHandler: このバイトデータは処理できません")
                 return []
                 
-            print(f"ZipHandler: メモリデータからすべてのエントリを取得中 ({len(archive_data)} バイト)")
+            self.debug_info(f"ZipHandler: メモリデータからすべてのエントリを取得中 ({len(archive_data)} バイト)")
             
             # メモリ上のZIPを開く
             bytes_io = io.BytesIO(archive_data)
@@ -1058,7 +1050,7 @@ class ZipHandler(ArchiveHandler):
                                         continue
                         except Exception as e:
                             # どんな例外が発生してもオリジナルのファイル名を使用
-                            print(f"  ファイル名エンコーディング処理エラー: {e}")
+                            self.debug_error(f"  ファイル名エンコーディング処理エラー: {e}")
                             name = info.filename
                             original_name = name
                         
@@ -1111,14 +1103,12 @@ class ZipHandler(ArchiveHandler):
                                 name_in_arc=original_name
                             ))
                     
-                    print(f"ZipHandler: メモリデータから全 {len(all_entries)} エントリを取得しました")
+                    self.debug_info(f"ZipHandler: メモリデータから全 {len(all_entries)} エントリを取得しました")
                     return all_entries
             except Exception as e:
-                print(f"ZipHandler: ZIPファイルオープンエラー: {e}")
-                traceback.print_exc()
+                self.debug_error(f"ZipHandler: ZIPファイルオープンエラー: {e}", trace=True)
                 return []
                 
         except Exception as e:
-            print(f"ZipHandler: メモリからの全エントリ取得エラー: {e}")
-            traceback.print_exc()
+            self.debug_error(f"ZipHandler: メモリからの全エントリ取得エラー: {e}", trace=True)
             return []

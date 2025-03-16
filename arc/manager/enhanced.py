@@ -72,23 +72,23 @@ class EnhancedArchiveManager(ArchiveManager):
         # パスの正規化（先頭のスラッシュを削除）
         if path.startswith('/'):
             path = path[1:]
-            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
+            self.debug_info(f"先頭のスラッシュを削除しました: {path}")
         
         # パスを正規化して相対パスとして扱う（末尾のスラッシュを削除）
         norm_path = path.replace('\\', '/').lstrip('/').rstrip('/')
         
         # キャッシュされたエントリリストから検索
         if self._all_entries:
-            print(f"EnhancedArchiveManager: キャッシュからエントリ情報を検索: {norm_path}")
+            self.debug_info(f"キャッシュからエントリ情報を検索: {norm_path}")
             
             # 正規化したパスでキャッシュを直接検索
             if norm_path in self._all_entries:
-                print(f"EnhancedArchiveManager: キャッシュでエントリを発見: {norm_path}")
+                self.debug_info(f"キャッシュでエントリを発見: {norm_path}")
                 return self._all_entries[norm_path]
             
-            print(f"EnhancedArchiveManager: キャッシュにエントリが見つかりませんでした: {norm_path}")
+            self.debug_info(f"キャッシュにエントリが見つかりませんでした: {norm_path}")
         else:
-            print(f"EnhancedArchiveManager: エントリキャッシュが初期化されていません")
+            self.debug_info(f"エントリキャッシュが初期化されていません")
         
         # キャッシュに見つからない場合はNoneを返す（フォールバックは行わない）
         return None
@@ -120,10 +120,10 @@ class EnhancedArchiveManager(ArchiveManager):
             # ハンドラのcurrent_pathを更新
             if self.current_path:
                 handler.set_current_path(self.current_path)
-            print(f"Handler found in cache: {handler.__class__.__name__}")
+            self.debug_info(f"Handler found in cache: {handler.__class__.__name__}")
             return handler
         
-        print(f"Getting handler for path: {norm_path}")
+        self.debug_info(f"Getting handler for path: {norm_path}")
         
         # アーカイブのアクセスパターンを検出（末尾がスラッシュで終わるアーカイブパス）
         if norm_path.endswith('/'):
@@ -144,7 +144,7 @@ class EnhancedArchiveManager(ArchiveManager):
                     if ext in handler.supported_extensions and handler.can_handle(base_path):
                         # キャッシュに追加
                         self._handler_cache[norm_path] = handler
-                        print(f"Archive directory handler found: {handler.__class__.__name__}")
+                        self.debug_info(f"Archive directory handler found: {handler.__class__.__name__}")
                         return handler
         
         # 通常のパス処理も逆順にハンドラを検索する
@@ -152,19 +152,19 @@ class EnhancedArchiveManager(ArchiveManager):
             # ハンドラにcurrent_pathを設定
             if self.current_path:
                 handler.set_current_path(self.current_path)
-            print(f"checking: {handler.__class__.__name__}")
+            self.debug_debug(f"checking: {handler.__class__.__name__}")
             
             try:
                 if handler.can_handle(norm_path):
                     # このハンドラで処理可能
                     self._handler_cache[norm_path] = handler
-                    print(f"Handler matched: {handler.__class__.__name__}")
+                    self.debug_info(f"Handler matched: {handler.__class__.__name__}")
                     return handler
             except Exception as e:
-                print(f"Handler error ({handler.__class__.__name__}): {e}")
+                self.debug_error(f"Handler error ({handler.__class__.__name__}): {e}", trace=True)
         
         # 該当するハンドラが見つからない
-        print(f"No handler found for: {norm_path}")
+        self.debug_warning(f"No handler found for: {norm_path}")
         return None
     
     def list_entries(self, path: str) -> List[EntryInfo]:
@@ -189,11 +189,11 @@ class EnhancedArchiveManager(ArchiveManager):
         # パスの正規化（先頭のスラッシュを削除）
         if path.startswith('/'):
             path = path[1:]
-            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
+            self.debug_info(f"先頭のスラッシュを削除しました: {path}")
         
         # パスを正規化して末尾のスラッシュを削除（キャッシュのキーは末尾スラッシュなし）
         norm_path = path.replace('\\', '/').rstrip('/')
-        print(f"EnhancedArchiveManager: パス '{norm_path}' のエントリを取得")
+        self.debug_info(f"パス '{norm_path}' のエントリを取得")
         
         # 空のパスはベースパス自体（ルート階層）を表す
         is_root = not norm_path
@@ -202,7 +202,7 @@ class EnhancedArchiveManager(ArchiveManager):
         if not self._all_entries:
             raise FileNotFoundError(f"エントリキャッシュが初期化されていません。set_current_pathを先に呼び出してください。")
         
-        print(f"EnhancedArchiveManager: キャッシュされた全エントリから検索します ({len(self._all_entries)} エントリキー)")
+        self.debug_info(f"キャッシュされた全エントリから検索します ({len(self._all_entries)} エントリキー)")
         
         # ルートディレクトリ(空パス)の場合
         if is_root:
@@ -221,10 +221,10 @@ class EnhancedArchiveManager(ArchiveManager):
                         if entry.path not in seen_paths:
                             result.append(entry)
                             seen_paths.add(entry.path)
-                            print(f"  発見 (ルート直下): {entry.name} ({entry.rel_path})")
+                            self.debug_info(f"  発見 (ルート直下): {entry.name} ({entry.rel_path})")
 
             # 結果を返す（空の場合でも空リストを返す）
-            print(f"EnhancedArchiveManager: キャッシュから {len(result)} エントリを取得しました")
+            self.debug_info(f"キャッシュから {len(result)} エントリを取得しました")
             return result
         
         # 非ルートパスの場合、相対パスとしてキャッシュをチェック
@@ -235,10 +235,10 @@ class EnhancedArchiveManager(ArchiveManager):
             if isinstance(entry, EntryInfo) and entry.type == EntryType.FILE:
                 # 問題点3の修正: ファイルエントリなのに末尾がスラッシュの場合は例外を投げる
                 if original_path.endswith('/') or original_path.endswith('\\'):
-                    print(f"EnhancedArchiveManager: ファイルパスの末尾にスラッシュがあります: {original_path}")
+                    self.debug_error(f"ファイルパスの末尾にスラッシュがあります: {original_path}")
                     raise ValueError(f"ファイルパス '{original_path}' の末尾にスラッシュがあります。ファイルパスにスラッシュは使用できません。")
                 
-                print(f"EnhancedArchiveManager: ファイルエントリを返します: {entry.path}")
+                self.debug_info(f"ファイルエントリを返します: {entry.path}")
                 return [entry]
         
         # 2. ディレクトリ/アーカイブエントリ自体をチェック
@@ -267,14 +267,14 @@ class EnhancedArchiveManager(ArchiveManager):
                                 if child_entry.path not in seen_paths:
                                     result.append(child_entry)
                                     seen_paths.add(child_entry.path)
-                                    print(f"  発見: {child_entry.name} ({child_entry.rel_path})")
+                                    self.debug_info(f"  発見: {child_entry.name} ({child_entry.rel_path})")
                 
                 # 結果を返す（空でも空リストを返す）
-                print(f"EnhancedArchiveManager: キャッシュから {len(result)} エントリを取得しました")
+                self.debug_info(f"キャッシュから {len(result)} エントリを取得しました")
                 return result
         
         # 指定されたパスが見つからない場合
-        print(f"EnhancedArchiveManager: キャッシュにマッチするエントリがありません。パス '{path}' は無効かアクセス不能です。")
+        self.debug_error(f"キャッシュにマッチするエントリがありません。パス '{path}' は無効かアクセス不能です。")
         raise FileNotFoundError(f"指定されたパス '{path}' にエントリが見つかりません")
 
     def _is_direct_child(self, parent_path: str, child_path: str) -> bool:
@@ -383,10 +383,6 @@ class EnhancedArchiveManager(ArchiveManager):
         """
         パスを解析し、アーカイブパスと内部パスに分割する
         
-        パスを末尾からファイル自体を除き、段階的に削りながらハンドラを検索し、
-        can_archive()がTrueのハンドラが処理できるパスをアーカイブパス、
-        元のパスのそれ以降の部分を内部パスとして返す
-        
         Args:
             path: 分割するパス
             
@@ -395,11 +391,11 @@ class EnhancedArchiveManager(ArchiveManager):
         """
         # 正規化したパス
         norm_path = path.replace('\\', '/')
-        print(f"EnhancedArchiveManager: パスを解析: {norm_path}")
+        self.debug_info(f"パスを解析: {norm_path}")
         
         # 物理フォルダの場合は、すぐにそのパスをアーカイブパスとして返す
         if os.path.isdir(norm_path):
-            print(f"EnhancedArchiveManager: 物理フォルダを検出: {norm_path}")
+            self.debug_info(f"物理フォルダを検出: {norm_path}")
             return norm_path, ""
         
         # パスをコンポーネントに分解
@@ -429,7 +425,7 @@ class EnhancedArchiveManager(ArchiveManager):
             # ハンドラがcan_archive()を実装し、かつTrueを返すかチェック
             if handler and handler.can_archive():
                 # アーカイブハンドラが見つかった場合
-                print(f"EnhancedArchiveManager: アーカイブパス特定: {abs_test_path}, 内部パス: {remaining}")
+                self.debug_info(f"アーカイブパス特定: {abs_test_path}, 内部パス: {remaining}")
                 return abs_test_path, remaining
             
             # パスをさらに削る（次の階層へ）
@@ -451,11 +447,11 @@ class EnhancedArchiveManager(ArchiveManager):
         if self.current_path and os.path.isfile(self.current_path) and self._is_archive_by_extension(self.current_path):
             # ルートがアーカイブファイルの場合、current_pathをアーカイブパスとして、
             # 元のパス全体を内部パスとして返す
-            print(f"EnhancedArchiveManager: ルートアーカイブを使用: {self.current_path}, 内部パス: {norm_path}")
+            self.debug_info(f"ルートアーカイブを使用: {self.current_path}, 内部パス: {norm_path}")
             return self.current_path, norm_path
         
         # ルートもアーカイブでない場合は空のアーカイブパスと残りの全部を返す
-        print(f"EnhancedArchiveManager: アーカイブパスが特定できませんでした: {norm_path}")
+        self.debug_warning(f"アーカイブパスが特定できませんでした: {norm_path}")
         return "", remaining
     
     def _find_handler_for_extension(self, ext: str) -> Optional[ArchiveHandler]:
@@ -549,10 +545,9 @@ class EnhancedArchiveManager(ArchiveManager):
         Returns:
             アーカイブ内のすべてのエントリ
         """
-        debug_mode = True  # デバッグモードを有効化
         # 循環参照防止とネスト深度チェック
         if self._current_nest_level >= self.MAX_NEST_DEPTH:
-            print(f"EnhancedArchiveManager: 最大ネスト階層 ({self.MAX_NEST_DEPTH}) に達しました")
+            self.debug_warning(f"最大ネスト階層 ({self.MAX_NEST_DEPTH}) に達しました")
             return []
         
         # 再帰レベルを増加
@@ -560,18 +555,18 @@ class EnhancedArchiveManager(ArchiveManager):
         
         try:
             archive_path = arc_entry.path
-            print(f"EnhancedArchiveManager: アーカイブ処理: {archive_path}")
-            print(f"EnhancedArchiveManager: アーカイブエントリ ({arc_entry.path} )")
+            self.debug_info(f"アーカイブ処理: {archive_path}")
+            self.debug_info(f"アーカイブエントリ ({arc_entry.path} )")
 
             # 書庫エントリの種別を確実にARCHIVEに設定
             # これが重要です - 物理ファイルであれ何であれ、この時点で処理されるエントリは書庫なので
             if arc_entry.type != EntryType.ARCHIVE:
-                print(f"EnhancedArchiveManager: エントリタイプをARCHIVEに修正: {arc_entry.path}")
+                self.debug_info(f"エントリタイプをARCHIVEに修正: {arc_entry.path}")
                 arc_entry.type = EntryType.ARCHIVE
 
             # 処理対象が物理ファイルであれば、適切な処理を行う
             if os.path.isfile(archive_path):
-                print(f"EnhancedArchiveManager: 物理ファイルを処理: {archive_path}")
+                self.debug_info(f"物理ファイルを処理: {archive_path}")
                 handler = self.get_handler(archive_path)
                 if handler:
                     try:
@@ -582,16 +577,14 @@ class EnhancedArchiveManager(ArchiveManager):
                             entries = super().finalyze_entries(entries, archive_path)
                             # 結果を返す前にEntryTypeをマーク
                             marked_entries = self._mark_archive_entries(entries)
-                            print(f"EnhancedArchiveManager: 物理アーカイブから {len(marked_entries)} エントリを取得")
+                            self.debug_info(f"物理アーカイブから {len(marked_entries)} エントリを取得")
                             return marked_entries
                         else:
-                            print(f"EnhancedArchiveManager: ハンドラはエントリを返しませんでした: {handler.__class__.__name__}")
+                            self.debug_warning(f"ハンドラはエントリを返しませんでした: {handler.__class__.__name__}")
                     except Exception as e:
-                        print(f"EnhancedArchiveManager: ハンドラの呼び出しでエラー: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        self.debug_error(f"ハンドラの呼び出しでエラー: {e}", trace=True)
                 else:
-                    print(f"EnhancedArchiveManager: ファイルを処理するハンドラが見つかりません: {archive_path}")
+                    self.debug_warning(f"ファイルを処理するハンドラが見つかりません: {archive_path}")
                 
                 # エラーまたは結果が空の場合は空リストを返す
                 return []
@@ -607,37 +600,37 @@ class EnhancedArchiveManager(ArchiveManager):
             # パスを詳細に分析して親書庫と内部パスを特定
             if parent_path:
                 parent_archive_path = parent_path
-                print(f"EnhancedArchiveManager: 親書庫を検出: {parent_archive_path}, 内部パス: {internal_path}")
+                self.debug_info(f"親書庫を検出: {parent_archive_path}, 内部パス: {internal_path}")
             else:
-                print(f"EnhancedArchiveManager: 親書庫が見つかりません: {archive_path}")
+                self.debug_warning(f"親書庫が見つかりません: {archive_path}")
                 return []
             
             # 絶対パスの確保
             if parent_archive_path and self.current_path and not os.path.isabs(parent_archive_path):
                 abs_path = os.path.join(self.current_path, parent_archive_path).replace('\\', '/')
-                print(f"EnhancedArchiveManager: 相対パスを絶対パスに変換: {parent_archive_path} -> {abs_path}")
+                self.debug_info(f"相対パスを絶対パスに変換: {parent_archive_path} -> {abs_path}")
                 parent_archive_path = abs_path
             
             # 2. 親書庫のハンドラを取得
             parent_handler = self.get_handler(parent_archive_path)
             if not parent_handler:
-                print(f"EnhancedArchiveManager: 親書庫のハンドラが見つかりません: {parent_archive_path}")
+                self.debug_warning(f"親書庫のハンドラが見つかりません: {parent_archive_path}")
                 return []
             
             # 3. ネスト書庫のコンテンツを取得
-            print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツを取得: {parent_archive_path} -> {internal_path}")
+            self.debug_info(f"親書庫からネスト書庫のコンテンツを取得: {parent_archive_path} -> {internal_path}")
             nested_archive_content = parent_handler.read_archive_file(parent_archive_path, internal_path)
             
             if not nested_archive_content:
-                print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツ取得に失敗")
+                self.debug_warning(f"親書庫からネスト書庫のコンテンツ取得に失敗")
                 return []
             
-            print(f"EnhancedArchiveManager: 親書庫からネスト書庫のコンテンツを取得成功: {len(nested_archive_content)} バイト")
+            self.debug_info(f"親書庫からネスト書庫のコンテンツを取得成功: {len(nested_archive_content)} バイト")
 
             # 4. ネスト書庫のハンドラを取得
             handler = self.get_handler(archive_path)
             if not handler:
-                print(f"EnhancedArchiveManager: 書庫のハンドラが見つかりません: {archive_path}")
+                self.debug_warning(f"書庫のハンドラが見つかりません: {archive_path}")
                 return []
             
             # 5. ネスト書庫のコンテンツの処理方法を決定
@@ -646,18 +639,18 @@ class EnhancedArchiveManager(ArchiveManager):
 
             # 現在のエントリにcacheプロパティがあるか確認
             if not hasattr(arc_entry, 'cache'):
-                print(f"EnhancedArchiveManager: エントリにcacheプロパティがありません。作成します。")
+                self.debug_info(f"エントリにcacheプロパティがありません。作成します。")
                 arc_entry.cache = None
 
             # キャッシュ処理 - 重要: ネスト書庫自身のコンテンツをキャッシュする
             if can_process_bytes:
                 # バイトデータを直接処理できる場合、バイトデータをキャッシュ
-                print(f"EnhancedArchiveManager: ネスト書庫のバイトデータをキャッシュします ({len(nested_archive_content)} バイト)")
+                self.debug_info(f"ネスト書庫のバイトデータをキャッシュします ({len(nested_archive_content)} バイト)")
                 arc_entry.cache = nested_archive_content
-                print(f"EnhancedArchiveManager: ネスト書庫のバイトデータをキャッシュしました ({arc_entry.path} )")
+                self.debug_info(f"ネスト書庫のバイトデータをキャッシュしました ({arc_entry.path} )")
             else:
                 # バイトデータを直接処理できない場合は一時ファイルを作成してパスをキャッシュ
-                print(f"EnhancedArchiveManager: ネスト書庫の一時ファイルパスをキャッシュします")
+                self.debug_info(f"ネスト書庫の一時ファイルパスをキャッシュします")
                 
                 # 拡張子を取得
                 _, ext = os.path.splitext(archive_path)
@@ -668,21 +661,21 @@ class EnhancedArchiveManager(ArchiveManager):
                 try:
                     temp_file_path = handler.save_to_temp_file(nested_archive_content, ext)
                     if not temp_file_path:
-                        print(f"EnhancedArchiveManager: 一時ファイル作成に失敗しました")
+                        self.debug_error(f"一時ファイル作成に失敗しました")
                         return []
                     
-                    print(f"EnhancedArchiveManager: 一時ファイルを作成: {temp_file_path}")
+                    self.debug_info(f"一時ファイルを作成: {temp_file_path}")
                     # 一時ファイルパスをキャッシュ
                     arc_entry.cache = temp_file_path
                     self._temp_files.add(temp_file_path)  # 後でクリーンアップするためにリストに追加
                 except Exception as e:
-                    print(f"EnhancedArchiveManager: 一時ファイル処理中にエラー: {e}")
-                    if temp_file_path and os.path.exists(temp_file_path):
+                    self.debug_error(f"一時ファイル処理中にエラー: {e}", trace=True)
+                    if 'temp_file_path' in locals() and temp_file_path and os.path.exists(temp_file_path):
                         try:
                             os.unlink(temp_file_path)
                             self._temp_files.discard(temp_file_path)
-                        except:
-                            pass
+                        except Exception as e2:
+                            self.debug_error(f"一時ファイル削除中にエラー: {e2}")
                     return []
             
             # 6. エントリリストを取得
@@ -692,20 +685,17 @@ class EnhancedArchiveManager(ArchiveManager):
                 # バイトデータから直接エントリリストを取得
                 if can_process_bytes:
                     entries = handler.list_all_entries_from_bytes(nested_archive_content)
-                    print(f"EnhancedArchiveManager: バイトデータから {len(entries) if entries else 0} エントリを取得")
+                    self.debug_info(f"バイトデータから {len(entries) if entries else 0} エントリを取得")
                 # 一時ファイルからエントリリストを取得
-                elif temp_file_path:
+                elif 'temp_file_path' in locals() and temp_file_path:
                     entries = handler.list_all_entries(temp_file_path)
-                    print(f"EnhancedArchiveManager: 一時ファイルから {len(entries) if entries else 0} エントリを取得")
+                    self.debug_info(f"一時ファイルから {len(entries) if entries else 0} エントリを取得")
             except Exception as e:
-                print(f"EnhancedArchiveManager: エントリリスト取得中にエラー: {e}")
-                if debug_mode:
-                    import traceback
-                    traceback.print_exc()
+                self.debug_error(f"エントリリスト取得中にエラー: {e}", trace=True)
             
             # エラーチェック
             if not entries:
-                print(f"EnhancedArchiveManager: エントリが取得できませんでした")
+                self.debug_warning(f"エントリが取得できませんでした")
                 return []
                 
             # 7. エントリリストの処理 - パスの修正とファイナライズを同時に行う
@@ -740,7 +730,7 @@ class EnhancedArchiveManager(ArchiveManager):
             marked_entries = self._mark_archive_entries(result_entries)
             
             # 9. キャッシュに保存 - 各エントリを個別に登録
-            print(f"EnhancedArchiveManager: {len(result_entries)} エントリをキャッシュに登録")
+            self.debug_info(f"{len(result_entries)} エントリをキャッシュに登録")
             
             # 各エントリを個別にキャッシュに追加（相対パスのみを使用）
             for entry in result_entries:
@@ -749,20 +739,18 @@ class EnhancedArchiveManager(ArchiveManager):
                 # 空文字でない相対パスのみ登録（ルートエントリは登録しない）
                 if entry_key or entry_key == "":  # 空文字列キー（ルート）も登録可能に
                     self._all_entries[entry_key] = entry
-                    print(f"EnhancedArchiveManager: エントリ {entry_key} をキャッシュに登録")
+                    self.debug_debug(f"エントリ {entry_key} をキャッシュに登録")
             
             # キャッシュ状態のデバッグ情報
-            if debug_mode:
-                print(f"EnhancedArchiveManager: キャッシュ状況:")
-                print(f"  書庫キャッシュ: arc_entry.cache {'あり' if arc_entry.cache is not None else 'なし'}")
-                print(f"  キャッシュされたエントリパス例: {[e.path for e in marked_entries[:3]]}")
+            self.debug_debug(f"キャッシュ状況:")
+            self.debug_debug(f"  書庫キャッシュ: arc_entry.cache {'あり' if arc_entry.cache is not None else 'なし'}")
+            sample_paths = [e.path for e in marked_entries[:min(3, len(marked_entries))]]
+            self.debug_debug(f"  キャッシュされたエントリパス例: {sample_paths}")
             
             return result_entries
         
         except Exception as e:
-            print(f"EnhancedArchiveManager: _process_archive_for_all_entries でエラー: {e}")
-            import traceback
-            traceback.print_exc()
+            self.debug_error(f"_process_archive_for_all_entries でエラー: {e}", trace=True)
             return []
         finally:
             # 再帰レベルを減少
@@ -820,21 +808,21 @@ class EnhancedArchiveManager(ArchiveManager):
         # パスの正規化（先頭のスラッシュを削除）
         if path.startswith('/'):
             path = path[1:]
-            print(f"EnhancedArchiveManager: 先頭のスラッシュを削除しました: {path}")
+            self.debug_info(f"先頭のスラッシュを削除しました: {path}")
         
         # パスからアーカイブと内部パス、キャッシュされたバイトデータを導き出す
-        print(f"EnhancedArchiveManager: アーカイブパス解析: {path}")
+        self.debug_info(f"アーカイブパス解析: {path}")
         result = self._resolve_file_source(path)
         archive_path, internal_path, cached_bytes = result
-        print(f"EnhancedArchiveManager: ファイル読み込み: {path} -> {archive_path} -> {internal_path}")         
+        self.debug_info(f"ファイル読み込み: {path} -> {archive_path} -> {internal_path}")         
         # アーカイブパスと内部パスがある場合
         if archive_path and internal_path:
-            print(f"EnhancedArchiveManager: アーカイブ内のファイルを読み込み: {archive_path} -> {internal_path}")
+            self.debug_info(f"アーカイブ内のファイルを読み込み: {archive_path} -> {internal_path}")
             handler = self.get_handler(archive_path)
             if (handler):
                 # キャッシュされたバイトデータがある場合は、read_file_from_bytesを使用
                 if cached_bytes is not None:
-                    print(f"EnhancedArchiveManager: キャッシュされた書庫データから内部ファイルを抽出: {internal_path}")
+                    self.debug_info(f"キャッシュされた書庫データから内部ファイルを抽出: {internal_path}")
                     content = handler.read_file_from_bytes(cached_bytes, internal_path)
                     if content is None:
                         raise FileNotFoundError(f"指定されたファイルはアーカイブ内に存在しません: {path}")
@@ -849,7 +837,7 @@ class EnhancedArchiveManager(ArchiveManager):
         # キャッシュされたバイトデータがある場合は、そのまま返す
         # (内部パスがない場合やハンドラがread_file_from_bytesをサポートしていない場合)
         if cached_bytes is not None:
-            print(f"EnhancedArchiveManager: キャッシュからファイルを読み込み: {path}")
+            self.debug_info(f"キャッシュからファイルを読み込み: {path}")
             return cached_bytes
         
         # 該当するファイルが見つからない場合はエラー
@@ -871,20 +859,20 @@ class EnhancedArchiveManager(ArchiveManager):
         """
         # パスを正規化（先頭のスラッシュを削除、末尾のスラッシュも削除）
         norm_path = path.replace('\\', '/').lstrip('/').rstrip('/')
-        print(f"EnhancedArchiveManager: ファイルソース解決: {norm_path}")
+        self.debug_info(f"ファイルソース解決: {norm_path}")
         
         # 1. まずエントリキャッシュから完全一致するエントリを検索
         entry_info = self.get_entry_info(norm_path)
         
         # エントリが見つからない場合は早期リターン
         if not entry_info:
-            print(f"EnhancedArchiveManager: 指定されたパス {norm_path} に対応するエントリが見つかりません")
+            self.debug_warning(f"指定されたパス {norm_path} に対応するエントリが見つかりません")
             return "", "", None
         
         # 2. パスコンポーネントを解析してアーカイブを特定
         archive_path = ""
         internal_path = entry_info.name_in_arc  # name_in_arcは必ず存在する前提
-        print(f"EnhancedArchiveManager: name_in_arcを内部パスとして使用: {internal_path}")
+        self.debug_info(f"name_in_arcを内部パスとして使用: {internal_path}")
         
         # パスをコンポーネントに分解して親となるアーカイブを特定
         parent_archive_path = self._find_parent_archive(norm_path)
@@ -898,10 +886,10 @@ class EnhancedArchiveManager(ArchiveManager):
             if parent_entry and hasattr(parent_entry, 'cache') and parent_entry.cache is not None:
                 cache = parent_entry.cache
                 if isinstance(cache, bytes):
-                    print(f"EnhancedArchiveManager: アーカイブエントリからキャッシュされたバイトデータを返します: {len(cache)} バイト")
+                    self.debug_info(f"アーカイブエントリからキャッシュされたバイトデータを返します: {len(cache)} バイト")
                     return parent_entry.path, internal_path, cache
                 elif isinstance(cache, str) and os.path.exists(cache):
-                    print(f"EnhancedArchiveManager: アーカイブエントリからキャッシュされた一時ファイルを返します: {cache}")
+                    self.debug_info(f"アーカイブエントリからキャッシュされた一時ファイルを返します: {cache}")
                     return cache, internal_path, None
         
         # アーカイブパスが特定できた場合
@@ -909,13 +897,13 @@ class EnhancedArchiveManager(ArchiveManager):
             # 相対パスを絶対パスに変換
             if not os.path.isabs(archive_path) and self.current_path:
                 archive_path = os.path.join(self.current_path, archive_path).replace('\\', '/')
-                print(f"EnhancedArchiveManager: アーカイブパスを絶対パスに変換: {archive_path}")
+                self.debug_info(f"アーカイブパスを絶対パスに変換: {archive_path}")
             
             return archive_path, internal_path, None
         
         # 親アーカイブが見つからない場合は、current_pathとname_in_arcを返す
         # これにより、ルートエントリなどの処理が正しく行われる
-        print(f"EnhancedArchiveManager: 親アーカイブが見つからないため、ルートパスを使用します")
+        self.debug_info(f"親アーカイブが見つからないため、ルートパスを使用します")
         return self.current_path, entry_info.name_in_arc, None
 
     def _find_parent_archive(self, path: str) -> str:
@@ -1021,44 +1009,42 @@ class EnhancedArchiveManager(ArchiveManager):
             # 物理パスの場合は絶対パスに変換
             abs_path = os.path.abspath(path)
             normalized_path = abs_path.replace('\\', '/')
-            print(f"EnhancedArchiveManager: 物理パスを絶対パスに変換: {path} -> {normalized_path}")
+            self.debug_info(f"物理パスを絶対パスに変換: {path} -> {normalized_path}")
             
             # フォルダの場合、末尾にスラッシュがあることを確認
             if os.path.isdir(path) and not normalized_path.endswith('/'):
                 normalized_path += '/'
-                print(f"EnhancedArchiveManager: フォルダパスの末尾にスラッシュを追加: {normalized_path}")
+                self.debug_info(f"フォルダパスの末尾にスラッシュを追加: {normalized_path}")
         
         # まず基底クラスのset_current_pathを呼び出して全ハンドラーに通知
         super().set_current_path(normalized_path)
-        print(f"EnhancedArchiveManager: 現在のパスを設定: {normalized_path}")
+        self.debug_info(f"現在のパスを設定: {normalized_path}")
         
         # デバッグ: list_all_entries 呼び出し前のルートエントリ状態
         if "" in self._all_entries:
             root_entry = self._all_entries[""]
-            print(f"DEBUG: [set_current_path] list_all_entries 呼び出し前のルートエントリ: rel_path=\"{root_entry.rel_path}\"")
+            self.debug_debug(f"[set_current_path] list_all_entries 呼び出し前のルートエントリ: rel_path=\"{root_entry.rel_path}\"")
         else:
-            print(f"DEBUG: [set_current_path] list_all_entries 呼び出し前: ルートエントリがまだ存在しません")
+            self.debug_debug(f"[set_current_path] list_all_entries 呼び出し前: ルートエントリがまだ存在しません")
         
         # ルートエントリ作成は list_all_entries に委譲
         
         # その後、すべてのエントリリストを再帰的に取得
         try:
-            print("EnhancedArchiveManager: 全エントリリストを取得中...")
+            self.debug_info("全エントリリストを取得中...")
             entries = self.list_all_entries(normalized_path, recursive=True)
             
             # デバッグ: list_all_entries 呼び出し後のルートエントリ状態
             if "" in self._all_entries:
                 root_entry = self._all_entries[""]
-                print(f"DEBUG: [set_current_path] list_all_entries 呼び出し後のルートエントリ: rel_path=\"{root_entry.rel_path}\"")
+                self.debug_debug(f"[set_current_path] list_all_entries 呼び出し後のルートエントリ: rel_path=\"{root_entry.rel_path}\"")
             else:
-                print(f"DEBUG: [set_current_path] list_all_entries 呼び出し後: ルートエントリが存在しません！")
+                self.debug_warning(f"[set_current_path] list_all_entries 呼び出し後: ルートエントリが存在しません！")
                 
-            print(f"EnhancedArchiveManager: {len(entries)} エントリを取得しました")
+            self.debug_info(f"{len(entries)} エントリを取得しました")
             return entries
         except Exception as e:
-            print(f"EnhancedArchiveManager: 全エントリリスト取得中にエラーが発生しました: {e}")
-            import traceback
-            traceback.print_exc()
+            self.debug_error(f"全エントリリスト取得中にエラーが発生しました: {e}", trace=True)
 
     def _ensure_root_entry_in_cache(self, path: str) -> None:
         """
@@ -1075,7 +1061,7 @@ class EnhancedArchiveManager(ArchiveManager):
         """
         # 物理ファイルとして存在しないパスの場合は例外を投げる
         if not os.path.exists(path):
-            print(f"EnhancedArchiveManager: パス '{path}' は物理ファイルとして存在しません")
+            self.debug_error(f"パス '{path}' は物理ファイルとして存在しません")
             raise FileNotFoundError(f"指定されたパス '{path}' が見つかりません")
         
         # パスを正規化
@@ -1083,13 +1069,13 @@ class EnhancedArchiveManager(ArchiveManager):
         
         # キャッシュが既に初期化されているかチェック
         if "" in self._all_entries:
-            print(f"EnhancedArchiveManager: ルートエントリはキャッシュに既に存在します")
+            self.debug_info(f"ルートエントリはキャッシュに既に存在します")
             return
         
         # カレントパスが物理フォルダかアーカイブファイルかを判断して処理を分ける
         if os.path.isdir(path):
             # 物理フォルダの場合の処理
-            print(f"EnhancedArchiveManager: 物理フォルダのルートエントリを作成: {path}")
+            self.debug_info(f"物理フォルダのルートエントリを作成: {path}")
             
             # パスから末尾のスラッシュを除去
             path_without_slash = path.rstrip('/')
@@ -1115,7 +1101,7 @@ class EnhancedArchiveManager(ArchiveManager):
                     # その他の特殊ケース
                     folder_name = path_without_slash or "Root"
             
-            print(f"EnhancedArchiveManager: フォルダ名: '{folder_name}'")
+            self.debug_debug(f"フォルダ名: '{folder_name}'")
             
             # EntryInfoオブジェクトを生成
             root_info = EntryInfo(
@@ -1139,11 +1125,10 @@ class EnhancedArchiveManager(ArchiveManager):
             self._all_entries[cache_key] = root_info
             
             # デバッグログの改善（引用符で囲んで空文字列を視覚化）
-            print(f"EnhancedArchiveManager: ルートエントリをキャッシュに追加: キー=\"{cache_key}\" -> パス=\"{root_info.path}\", rel_path=\"{root_info.rel_path}\"")
+            self.debug_debug(f"ルートエントリをキャッシュに追加: キー=\"{cache_key}\" -> パス=\"{root_info.path}\", rel_path=\"{root_info.rel_path}\"")
             
             # 物理フォルダの内容をキャッシュに追加
             try:
-                # フォルダの内容を取得
                 folder_contents = []
                 
                 for item in os.listdir(path):
@@ -1197,16 +1182,16 @@ class EnhancedArchiveManager(ArchiveManager):
                             cache_key = rel_path.rstrip('/')
                             self._all_entries[cache_key] = entry
                         except Exception as e:
-                            print(f"EnhancedArchiveManager: ファイル情報取得エラー: {item_path} - {e}")
+                            self.debug_error(f"ファイル情報取得エラー: {item_path} - {e}", trace=True)
                     
-                print(f"EnhancedArchiveManager: フォルダ内容を処理: {path} ({len(folder_contents)} アイテム)")
+                self.debug_info(f"フォルダ内容を処理: {path} ({len(folder_contents)} アイテム)")
                     
             except Exception as e:
-                print(f"EnhancedArchiveManager: フォルダ内容の取得エラー: {path} - {e}")
+                self.debug_error(f"フォルダ内容の取得エラー: {path} - {e}", trace=True)
         
         elif os.path.isfile(path):
             # アーカイブファイルの場合の処理
-            print(f"EnhancedArchiveManager: アーカイブファイルのルートエントリを作成: {path}")
+            self.debug_info(f"アーカイブファイルのルートエントリを作成: {path}")
             
             # ファイル情報を取得
             try:
@@ -1232,7 +1217,7 @@ class EnhancedArchiveManager(ArchiveManager):
                 
                 # 属性が正しく設定されたか確認
                 if root_info.rel_path != "":
-                    print(f"警告: ルートエントリのrel_pathが上書きされています: \"{root_info.rel_path}\"")
+                    self.debug_warning(f"警告: ルートエントリのrel_pathが上書きされています: \"{root_info.rel_path}\"")
                     root_info.rel_path = ""  # 強制的に修正
                 
                 # キャッシュキーとして使用するための確実に空文字列である変数
@@ -1242,7 +1227,7 @@ class EnhancedArchiveManager(ArchiveManager):
                 self._all_entries[cache_key] = root_info
                 
                 # デバッグログの改善（引用符で囲んで空文字列を視覚化）
-                print(f"EnhancedArchiveManager: ルートエントリをキャッシュに追加: キー=\"{cache_key}\" -> パス=\"{root_info.path}\", rel_path=\"{root_info.rel_path}\"")
+                self.debug_debug(f"ルートエントリをキャッシュに追加: キー=\"{cache_key}\" -> パス=\"{root_info.path}\", rel_path=\"{root_info.rel_path}\"")
                 
                 # アーカイブの場合、アーカイブ内のエントリを取得・登録
                 try:
@@ -1253,7 +1238,7 @@ class EnhancedArchiveManager(ArchiveManager):
                         # 修正: list_entriesではなくlist_all_entriesを使用
                         direct_children = handler.list_all_entries(path)
                         if direct_children:
-                            print(f"EnhancedArchiveManager: アーカイブから {len(direct_children)} エントリを取得")
+                            self.debug_info(f"アーカイブから {len(direct_children)} エントリを取得")
                             
                             # エントリをファイナライズしてアーカイブを識別
                             for entry in direct_children:
@@ -1266,22 +1251,16 @@ class EnhancedArchiveManager(ArchiveManager):
                                     cache_key = rel_path.rstrip('/')
                                     self._all_entries[cache_key] = finalized_entry
                         else:
-                            print(f"EnhancedArchiveManager: アーカイブは空です: {path}")
+                            self.debug_info(f"アーカイブは空です: {path}")
                 except Exception as e:
-                    print(f"EnhancedArchiveManager: アーカイブのエントリ取得中にエラー: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    self.debug_error(f"アーカイブのエントリ取得中にエラー: {e}", trace=True)
                 
             except Exception as e:
-                print(f"EnhancedArchiveManager: ファイル情報取得エラー: {path} - {e}")
+                self.debug_error(f"ファイル情報取得エラー: {path} - {e}", trace=True)
 
     def list_all_entries(self, path: str, recursive: bool = True) -> List[EntryInfo]:
         """
         指定されたパスの配下にあるすべてのエントリを再帰的に取得する
-        
-        アーカイブ内のアーカイブ（ネストされたアーカイブ）も探索し、
-        すべてのエントリを統合されたリストとして返します。
-        結果はクラス変数に保存され、後で get_all_entries() で取得できます。
         
         Args:
             path: リストを取得するディレクトリやアーカイブのパス（ベースパス）
@@ -1300,15 +1279,15 @@ class EnhancedArchiveManager(ArchiveManager):
         
         try:
             # キャッシュをクリアした後、最初にルートエントリをキャッシュに追加
-            print(f"DEBUG: [list_all_entries] _ensure_root_entry_in_cache 呼び出し前")
+            self.debug_debug(f"[list_all_entries] _ensure_root_entry_in_cache 呼び出し前")
             self._ensure_root_entry_in_cache(path)
             
             # デバッグ: ルートエントリ作成直後の状態
             if "" in self._all_entries:
                 root_entry = self._all_entries[""]
-                print(f"DEBUG: [list_all_entries] ルートエントリ作成直後: rel_path=\"{root_entry.rel_path}\"")
+                self.debug_debug(f"[list_all_entries] ルートエントリ作成直後: rel_path=\"{root_entry.rel_path}\"")
             else:
-                print(f"DEBUG: [list_all_entries] ルートエントリ作成失敗！")
+                self.debug_warning(f"[list_all_entries] ルートエントリ作成失敗！")
             
             # 1. 最初にルートパス自身のエントリ情報を取得
             root_entry_info = self.get_raw_entry_info(path)
@@ -1316,21 +1295,21 @@ class EnhancedArchiveManager(ArchiveManager):
             # 2. ハンドラを取得（ファイル種別に合わせて適切なハンドラ）
             handler = self.get_handler(path)
             if not handler:
-                print(f"EnhancedArchiveManager: パス '{path}' のハンドラが見つかりません")
+                self.debug_warning(f"パス '{path}' のハンドラが見つかりません")
                 # ルートエントリがあれば、それだけを返す
                 if root_entry_info:
                     return [root_entry_info]
                 return []
             
-            print(f"EnhancedArchiveManager: '{handler.__class__.__name__}' を使用して再帰的にエントリを探索します")
+            self.debug_info(f"'{handler.__class__.__name__}' を使用して再帰的にエントリを探索します")
             
             # 3. 最初のレベルのエントリリストを取得
             raw_base_entries = handler.list_all_entries(path)
             if not raw_base_entries:
-                print(f"EnhancedArchiveManager: エントリが見つかりませんでした: {path}")
+                self.debug_warning(f"エントリが見つかりませんでした: {path}")
                 # エントリが取得できなくても、ルートエントリ自体は返す
                 if root_entry_info:
-                    print(f"EnhancedArchiveManager: ルートエントリのみを返します")
+                    self.debug_info(f"ルートエントリのみを返します")
                     return [root_entry_info]
                 return []
             
@@ -1340,7 +1319,7 @@ class EnhancedArchiveManager(ArchiveManager):
                 finalized_entry = self.finalize_entry(entry, path)
                 base_entries.append(finalized_entry)
             
-            print(f"EnhancedArchiveManager: ベースレベルで {len(base_entries)} エントリを取得しました")
+            self.debug_info(f"ベースレベルで {len(base_entries)} エントリを取得しました")
             
             # 5. 結果リストを構築（ルートエントリを先頭に）
             all_entries = []
@@ -1349,7 +1328,7 @@ class EnhancedArchiveManager(ArchiveManager):
             if root_entry_info:
                 # ファイナライズでアーカイブ判定が行われるため、ここではfinalize_entryを適用
                 root_entry_info = self.finalize_entry(root_entry_info, path)
-                print(f"EnhancedArchiveManager: ルートエントリをリストに追加: {root_entry_info.path}")
+                self.debug_info(f"ルートエントリをリストに追加: {root_entry_info.path}")
                 all_entries.append(root_entry_info)
             
             # ベースエントリを結果リストに追加
@@ -1362,7 +1341,7 @@ class EnhancedArchiveManager(ArchiveManager):
                 # 空でない相対パスのみ登録
                 if entry_key or entry_key == "":  # 空文字列キー（ルート）も登録可能に
                     self._all_entries[entry_key] = entry
-                    print(f"EnhancedArchiveManager: ベースエントリ {entry_key} をキャッシュに登録")
+                    self.debug_debug(f"ベースエントリ {entry_key} をキャッシュに登録")
             
             # 7. アーカイブエントリを再帰的に処理
             if recursive:
@@ -1374,7 +1353,7 @@ class EnhancedArchiveManager(ArchiveManager):
                     if entry.type == EntryType.ARCHIVE:
                         archive_queue.append(entry)
                 
-                print(f"EnhancedArchiveManager: {len(archive_queue)} 個のネスト書庫を検出")
+                self.debug_info(f"{len(archive_queue)} 個のネスト書庫を検出")
                 
                 # アーカイブを処理
                 while archive_queue:
@@ -1414,16 +1393,14 @@ class EnhancedArchiveManager(ArchiveManager):
             # メソッドの最後で再度ルートエントリの状態を確認
             if "" in self._all_entries:
                 root_entry = self._all_entries[""]
-                print(f"DEBUG: [list_all_entries] メソッド終了時のルートエントリ: rel_path=\"{root_entry.rel_path}\"")
+                self.debug_debug(f"[list_all_entries] メソッド終了時のルートエントリ: rel_path=\"{root_entry.rel_path}\"")
             else:
-                print(f"DEBUG: [list_all_entries] メソッド終了時: ルートエントリが存在しません！")
+                self.debug_warning(f"[list_all_entries] メソッド終了時: ルートエントリが存在しません！")
             
             return all_entries
                 
         except Exception as e:
-            print(f"EnhancedArchiveManager.list_all_entries エラー: {e}")
-            import traceback
-            traceback.print_exc()
+            self.debug_error(f"list_all_entries エラー: {e}", trace=True)
             # エラーが発生しても、ルートエントリが取得できていれば返す
             if 'root_entry_info' in locals() and root_entry_info:
                 return [root_entry_info]

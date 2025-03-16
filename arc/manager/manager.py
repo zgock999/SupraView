@@ -4,10 +4,13 @@
 複数のアーカイブハンドラを管理し、適切なハンドラに処理を委譲するマネージャー
 """
 import os
-from typing import List, Optional, BinaryIO, Dict
+from typing import List, Optional, BinaryIO, Dict, Any
 
 from ..arc import EntryInfo, EntryType
 from ..handler.handler import ArchiveHandler
+# loggingモジュールからlogutilsへの参照変更
+from logutils import log_print, log_trace, DEBUG, INFO, WARNING, ERROR, CRITICAL
+
 
 class ArchiveManager:
     """
@@ -24,6 +27,45 @@ class ArchiveManager:
         self.current_path: str = ""
         # ハンドラーキャッシュ
         self._handler_cache: Dict[str, ArchiveHandler] = {}
+    
+    def debug_print(self, message: Any, *args, level: int = INFO, trace: bool = False, **kwargs):
+        """
+        デバッグ出力のラッパーメソッド
+        
+        Args:
+            message: 出力するメッセージ
+            *args: メッセージのフォーマット用引数
+            level: ログレベル（デフォルトはINFO）
+            trace: Trueならスタックトレース情報も出力する（デフォルトはFalse）
+            **kwargs: 追加のキーワード引数
+        """
+        # クラス名をログの名前空間として使用
+        name = f"arc.manager.{self.__class__.__name__}"
+        
+        if trace:
+            log_trace(None, level, message, *args, name=name, **kwargs)
+        else:
+            log_print(level, message, *args, name=name, **kwargs)
+    
+    def debug_debug(self, message: Any, *args, trace: bool = False, **kwargs):
+        """DEBUGレベルのログ出力"""
+        self.debug_print(message, *args, level=DEBUG, trace=trace, **kwargs)
+    
+    def debug_info(self, message: Any, *args, trace: bool = False, **kwargs):
+        """INFOレベルのログ出力"""
+        self.debug_print(message, *args, level=INFO, trace=trace, **kwargs)
+    
+    def debug_warning(self, message: Any, *args, trace: bool = False, **kwargs):
+        """WARNINGレベルのログ出力"""
+        self.debug_print(message, *args, level=WARNING, trace=trace, **kwargs)
+    
+    def debug_error(self, message: Any, *args, trace: bool = False, **kwargs):
+        """ERRORレベルのログ出力"""
+        self.debug_print(message, *args, level=ERROR, trace=trace, **kwargs)
+        
+    def debug_critical(self, message: Any, *args, trace: bool = False, **kwargs):
+        """CRITICALレベルのログ出力"""
+        self.debug_print(message, *args, level=CRITICAL, trace=trace, **kwargs)
     
     def register_handler(self, handler: ArchiveHandler) -> None:
         """
@@ -117,7 +159,7 @@ class ArchiveManager:
         # ルートからの相対パスを設定
         rel_path = abs_path.replace(self.current_path, '', 1).lstrip('/')
         entry.rel_path = rel_path
-        #print(f"ArchiveManager: Finalized: rel_path={entry.rel_path}")
+        self.debug_debug(f"ArchiveManager: Finalized: rel_path={entry.rel_path}")
         return entry
 
     def finalize_entries(self, entries: List[EntryInfo], archive_path:str) -> List[EntryInfo]:

@@ -4,11 +4,11 @@ rarfileパッケージを利用したRARアーカイブハンドラ
 rarfileパッケージを使用してRARアーカイブ操作を行うハンドラモジュール
 より安定したRAR形式の処理を提供するため、専用のハンドラとして実装
 """
-
 import os
-import datetime
-import tempfile
 import io
+import tempfile
+import traceback
+import datetime
 from typing import List, Optional, Dict, BinaryIO, Tuple
 
 try:
@@ -16,9 +16,11 @@ try:
     RARFILE_AVAILABLE = True
 except ImportError:
     RARFILE_AVAILABLE = False
-    print("RarHandler: rarfileパッケージが見つかりません。'pip install rarfile'でインストールしてください。")
-    print("RarHandler: また、UnRARが必要です - Windows版は自動的にダウンロードされます。")
-    print("RarHandler: Unix系では別途UnRARをインストールしてください。")
+    # printを置き換え
+    from logutils import log_print, ERROR
+    log_print(ERROR, "RarHandler: rarfileパッケージが見つかりません。'pip install rarfile'でインストールしてください。", name="arc.handler.RarHandler")
+    log_print(ERROR, "RarHandler: また、UnRARが必要です - Windows版は自動的にダウンロードされます。", name="arc.handler.RarHandler")
+    log_print(ERROR, "RarHandler: Unix系では別途UnRARをインストールしてください。", name="arc.handler.RarHandler")
 
 from ..arc import EntryInfo, EntryType
 from .handler import ArchiveHandler
@@ -45,7 +47,7 @@ class RarHandler(ArchiveHandler):
             return
         self.debug = False
             
-        print(f"RarHandler: rarfileパッケージが利用可能です (バージョン: {rarfile.__version__})")
+        self.debug_info(f"rarfileパッケージが利用可能です (バージョン: {rarfile.__version__})")
         
         # rarfileの設定
         self._configure_rarfile()
@@ -73,20 +75,11 @@ class RarHandler(ArchiveHandler):
             rarfile.USE_DATETIME = True  # datetime型を使用
             
             # WinRAR/UnRAR実行ファイルのパスを設定（Windows以外）
-            if os.name != 'nt':  # Windowsでない場合
-                # Linuxの一般的な場所をチェック
-                unrar_paths = [
-                    '/usr/bin/unrar',
-                    '/usr/local/bin/unrar',
-                    '/opt/local/bin/unrar'
-                ]
-                for path in unrar_paths:
-                    if os.path.exists(path):
-                        rarfile.UNRAR_TOOL = path
-                        print(f"RarHandler: UnRAR実行ファイルを検出: {path}")
-                        break
+            if os.name != 'nt':
+                # Linux/Macなどでは通常別途インストールが必要
+                pass
         except Exception as e:
-            print(f"RarHandler: rarfileの設定中にエラーが発生しました: {e}")
+            self.debug_error(f"rarfileの設定中にエラーが発生しました: {e}")
     
     @property
     def supported_extensions(self) -> List[str]:
@@ -116,7 +109,7 @@ class RarHandler(ArchiveHandler):
         
         # 拡張子のみでチェック
         _, ext = os.path.splitext(norm_path.lower())
-        print(f"RarHandler: 拡張子チェック: {ext}")
+        self.debug_info(f"拡張子チェック: {ext}")
         return ext in self._supported_formats
             
     
@@ -167,19 +160,19 @@ class RarHandler(ArchiveHandler):
             return result
             
         try:
-            print(f"RarHandler: エントリ一覧を取得: {path}")
+            self.debug_info(f"エントリ一覧を取得: {path}")
             # RARファイルを開く
             with rarfile.RarFile(path) as rf:
-                print(f"RarHandler: RARアーカイブパス: {path}, 内部パス: {internal_path}")
+                self.debug_info(f"RARアーカイブパス: {path}, 内部パス: {internal_path}")
                 
                 # エントリ一覧を取得する共通関数を呼び出す
                 result = self._get_entries_from_rarfile(rf, internal_path)
                 
-                print(f"RarHandler: {len(result)} エントリを返します")
+                self.debug_info(f"{len(result)} エントリを返します")
                 return result
         except Exception as e:
             if self.debug:
-                print(f"RarHandler: エントリ一覧取得エラー: {e}")
+                self.debug_error(f"エントリ一覧取得エラー: {e}", trace=True)
             return []
 
     def _get_entries_from_rarfile(self, rf: 'rarfile.RarFile', internal_path: str = "") -> List[EntryInfo]:
@@ -212,7 +205,7 @@ class RarHandler(ArchiveHandler):
                 return result
             except Exception as e:
                 if self.debug:
-                    print(f"RarHandler: 内部パスの情報取得エラー: {e}")
+                    self.debug_error(f"内部パスの情報取得エラー: {e}", trace=True)
                     
         # 一意なディレクトリパスを追跡するセット
         unique_dirs = set()
@@ -289,7 +282,7 @@ class RarHandler(ArchiveHandler):
             return result
             
         try:
-            print(f"RarHandler: メモリ上のRARデータ ({len(data)} バイト) からエントリリスト取得")
+            self.debug_info(f"メモリ上のRARデータ ({len(data)} バイト) からエントリリスト取得")
             
             # 一時ファイルを作成
             with tempfile.NamedTemporaryFile(delete=False, suffix='.rar') as tmp:
@@ -308,11 +301,11 @@ class RarHandler(ArchiveHandler):
                 except:
                     pass
                     
-            print(f"RarHandler: {len(result)} エントリを返します")
+            self.debug_info(f"{len(result)} エントリを返します")
             return result
         except Exception as e:
             if self.debug:
-                print(f"RarHandler: バイトデータからのエントリ一覧取得エラー: {e}")
+                self.debug_error(f"バイトデータからのエントリ一覧取得エラー: {e}", trace=True)
             return []
 
     def get_entry_info(self, path: str) -> Optional[EntryInfo]:
@@ -354,18 +347,18 @@ class RarHandler(ArchiveHandler):
                     # そのディレクトリ内に何かファイルがあるか確認
                     for item in rf.infolist():
                         if item.filename.startswith(internal_path):
+                            # ディレクトリとして存在する
                             return self.create_entry_info(
                                 name=os.path.basename(internal_path.rstrip('/')),
                                 abs_path=internal_path,
                                 size=0,
-                                modified_time=None,
                                 type=EntryType.DIRECTORY
                             )
                             
                     return None
         except Exception as e:
             if self.debug:
-                print(f"RarHandler: エントリ情報取得エラー: {e}")
+                self.debug_error(f"エントリ情報取得エラー: {e}", trace=True)
             return None
     
     def read_file(self, path: str) -> Optional[bytes]:
@@ -393,7 +386,7 @@ class RarHandler(ArchiveHandler):
                 return rf.read(internal_path)
         except Exception as e:
             if self.debug:
-                print(f"RarHandler: ファイル読み込みエラー: {e}")
+                self.debug_error(f"ファイル読み込みエラー: {e}", trace=True)
             return None
     
     def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
@@ -410,7 +403,7 @@ class RarHandler(ArchiveHandler):
         if not RARFILE_AVAILABLE or not self._available:
             return None
         
-        print(f"RarHandler: アーカイブ内ファイル読み込み: {archive_path} -> {file_path}")
+        self.debug_info(f"アーカイブ内ファイル読み込み: {archive_path} -> {file_path}")
         
         try:
             # RARファイルを開く
@@ -428,59 +421,45 @@ class RarHandler(ArchiveHandler):
             
             # ディレクトリの場合は特別に処理
             if entry_info and entry_info.type == EntryType.DIRECTORY:
-                print(f"RarHandler: 指定されたパスはディレクトリです: {file_path}")
-                return None
+                # ディレクトリ内容は空バイトを返す
+                return b''
             
             # ファイルが存在するか確認
             try:
                 info = rf.getinfo(normal_path)
             except KeyError:
-                print(f"RarHandler: ファイルが見つかりません: {normal_path}")
-                
-                # 末尾にスラッシュを追加して、ディレクトリとして再試行
-                if not normal_path.endswith('/'):
-                    try:
-                        dir_path = normal_path + '/'
-                        info = rf.getinfo(dir_path)
-                        print(f"RarHandler: 指定されたパスはディレクトリです: {dir_path}")
-                        return None
-                    except KeyError:
-                        pass
-                
+                self.debug_error(f"ファイルが見つかりません: {normal_path}")
                 return None
                 
             # ディレクトリの場合は読み込みをスキップ
             if info.isdir():
-                print(f"RarHandler: 指定されたパスはディレクトリです: {normal_path}")
-                return None
+                return b''
             
             # ファイルを読み込む
             with rf.open(normal_path) as f:
                 content = f.read()
                 
-            print(f"RarHandler: ファイル読み込み成功: {len(content)} バイト")
+            self.debug_info(f"ファイル読み込み成功: {len(content)} バイト")
             return content
             
         except rarfile.BadRarFile as e:
-            print(f"RarHandler: 不正なRARファイル: {e}")
+            self.debug_error(f"不正なRARファイル: {e}")
             return None
         except rarfile.RarCRCError as e:
-            print(f"RarHandler: CRCエラー: {e}")
+            self.debug_error(f"CRCエラー: {e}")
             return None
         except rarfile.PasswordRequired as e:
-            print(f"RarHandler: パスワードが必要: {e}")
+            self.debug_error(f"パスワードが必要: {e}")
             return None
         except rarfile.NeedFirstVolume as e:
-            print(f"RarHandler: 最初のボリュームが必要: {e}")
+            self.debug_error(f"最初のボリュームが必要: {e}")
             return None
         except io.UnsupportedOperation as e:
             # ディレクトリの読み込み試行時に発生
-            print(f"RarHandler: サポートされていない操作: {e}")
+            self.debug_error(f"サポートされていない操作: {e}")
             return None
         except Exception as e:
-            print(f"RarHandler: ファイル読み込み中にエラー: {e}")
-            import traceback
-            traceback.print_exc()
+            self.debug_error(f"ファイル読み込み中にエラー: {e}", trace=True)
             return None
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
@@ -496,7 +475,7 @@ class RarHandler(ArchiveHandler):
         if not RARFILE_AVAILABLE or not self._available:
             return None
         
-        print(f"RarHandler: ファイルストリーム取得: {path}")
+        self.debug_info(f"ファイルストリーム取得: {path}")
         
         # パスがアーカイブファイル自体かアーカイブ内のパスかを判定
         archive_path, internal_path = self._split_path(path)
@@ -513,7 +492,7 @@ class RarHandler(ArchiveHandler):
             if content is not None:
                 return io.BytesIO(content)
         except Exception as e:
-            print(f"RarHandler: メモリストリーム作成エラー: {e}")
+            self.debug_error(f"メモリストリーム作成エラー: {e}", trace=True)
         
         return None
     
@@ -612,12 +591,12 @@ class RarHandler(ArchiveHandler):
         archive_path, internal_path = self._split_path(path)
         
         if not archive_path or not os.path.isfile(archive_path):
-            print(f"RarHandler: 有効なRARファイルが見つかりません: {path}")
+            self.debug_warning(f"有効なRARファイルが見つかりません: {path}")
             return []
         
         # 内部パスが指定されている場合はエラー（このメソッドではアーカイブ全体を対象とする）
         if internal_path:
-            print(f"RarHandler: list_all_entriesでは内部パスを指定できません。アーカイブ全体が対象です: {path}")
+            self.debug_warning(f"list_all_entriesでは内部パスを指定できません。アーカイブ全体が対象です: {path}")
             # 内部パスを無視してアーカイブファイル全体を処理
         
         try:
@@ -625,13 +604,10 @@ class RarHandler(ArchiveHandler):
             with rarfile.RarFile(archive_path) as rf:
                 # 共通関数を使用してすべてのエントリを取得
                 all_entries = self._get_all_entries_from_rarfile(rf, archive_path)
-                print(f"RarHandler: {archive_path} 内の全エントリ数: {len(all_entries)}")
+                self.debug_info(f"{archive_path} 内の全エントリ数: {len(all_entries)}")
                 return all_entries
         except Exception as e:
-            print(f"RarHandler: 全エントリ取得中にエラーが発生しました: {e}")
-            if self.debug:
-                import traceback
-                traceback.print_exc()
+            self.debug_error(f"全エントリ取得中にエラーが発生しました: {e}", trace=True)
             return []
 
     def _get_all_entries_from_rarfile(self, rf: 'rarfile.RarFile', archive_path: 'str') -> List[EntryInfo]:
@@ -704,15 +680,15 @@ class RarHandler(ArchiveHandler):
         """
         try:
             if not self.can_handle_bytes(archive_data):
-                print(f"RarHandler: このバイトデータは処理できません")
+                self.debug_warning(f"このバイトデータは処理できません")
                 return []
                     
-            print(f"RarHandler: メモリデータからすべてのエントリを取得中 ({len(archive_data)} バイト)")
+            self.debug_info(f"メモリデータからすべてのエントリを取得中 ({len(archive_data)} バイト)")
             
             # 一時ファイルに保存
             temp_file = self.save_to_temp_file(archive_data, '.rar')
             if not temp_file:
-                print(f"RarHandler: 一時ファイル作成に失敗しました")
+                self.debug_error(f"一時ファイル作成に失敗しました")
                 return []
             
             try:
@@ -720,16 +696,14 @@ class RarHandler(ArchiveHandler):
                 with rarfile.RarFile(temp_file) as rf:
                     # 共通関数を使用してすべてのエントリを取得
                     all_entries = self._get_all_entries_from_rarfile(rf,"")
-                    print(f"RarHandler: メモリデータから全 {len(all_entries)} エントリを取得しました")
+                    self.debug_info(f"メモリデータから全 {len(all_entries)} エントリを取得しました")
                     return all_entries
             finally:
                 # 一時ファイルを削除
                 self.cleanup_temp_file(temp_file)
         
         except Exception as e:
-            print(f"RarHandler: メモリからの全エントリ取得エラー: {e}")
-            import traceback
-            traceback.print_exc()
+            self.debug_error(f"メモリからの全エントリ取得エラー: {e}", trace=True)
             return []
 
     def read_file_from_bytes(self, archive_data: bytes, file_path: str) -> Optional[bytes]:
@@ -746,7 +720,7 @@ class RarHandler(ArchiveHandler):
         if not RARFILE_AVAILABLE or not self._available:
             return None
             
-        print(f"RarHandler: メモリ上のRARデータから '{file_path}' を読み込み中")
+        self.debug_info(f"メモリ上のRARデータから '{file_path}' を読み込み中")
         
         # 一時ファイルを使用して確実に処理
         temp_file = None
@@ -765,33 +739,28 @@ class RarHandler(ArchiveHandler):
                 
                 # ファイルを読み込む
                 try:
-                    with rf.open(normal_path) as f:
-                        content = f.read()
-                        
-                    print(f"RarHandler: ファイル読み込み成功: {len(content)} バイト")
+                    content = rf.read(normal_path)
+                    self.debug_info(f"ファイル読み込み成功: {len(content)} バイト")
                     return content
                 except KeyError:
-                    print(f"RarHandler: ファイルが見つかりません: {normal_path}")
+                    self.debug_error(f"ファイルが見つかりません: {normal_path}")
                     return None
                 except Exception as e:
-                    print(f"RarHandler: ファイル読み込みエラー: {e}")
+                    self.debug_error(f"ファイル読み込み中にエラー: {e}", trace=True)
                     return None
             except Exception as e:
-                print(f"RarHandler: RARファイルをオープンできません: {e}")
+                self.debug_error(f"RARファイルをオープンできません: {e}", trace=True)
                 return None
         except Exception as e:
-            print(f"RarHandler: メモリデータからの読み込みエラー: {e}")
-            if self.debug:
-                import traceback
-                traceback.print_exc()
+            self.debug_error(f"メモリデータからの読み込みエラー: {e}", trace=True)
             return None
         finally:
             # 一時ファイルを削除
             if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                except:
-                    pass
+                except Exception as e:
+                    self.debug_warning(f"一時ファイル削除エラー: {e}")
 
 
     def _join_paths(self, base_path: str, rel_path: str) -> str:

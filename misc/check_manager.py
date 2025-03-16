@@ -1,22 +1,31 @@
 #!/usr/bin/env python3
 """
-アーカイブマネージャーのテスト用コマンドラインツール
+アーカイブマネージャのテストユーティリティ
 
-このツールはアーカイブマネージャーの操作をテストするための簡易的なCLIを提供します。
+アーカイブマネージャの機能とパフォーマンスをテストするためのツール
 """
-
 import os
 import sys
 import io
 import argparse
 import traceback
 import time
+import json
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-# パスの追加（親ディレクトリをインポートパスに含める）
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-# アーカイブマネージャークラスをインポート
+# 親ディレクトリをPythonパスに追加して、プロジェクトのモジュールをインポートできるようにする
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    print(f"Added {project_root} to Python path")
+
+# モジュールをインポート - パス設定後にインポートするように移動
+from logutils import setup_logging, log_print, log_trace, DEBUG, INFO, WARNING, ERROR, CRITICAL
 from arc.manager.enhanced import EnhancedArchiveManager
+from arc.handler.fs_handler import FileSystemHandler
+from arc.handler.zip_handler import ZipHandler
+from arc.handler.rar_handler import RarHandler
 from arc.interface import get_archive_manager  # interfaceモジュールからインポート
 from arc.arc import EntryInfo, EntryType
 from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
@@ -24,7 +33,7 @@ from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
 try:
     pass
 except ImportError as e:
-    print(f"エラー: アーカイブマネージャーのインポートに失敗しました: {e}")
+    log_print(ERROR, f"エラー: アーカイブマネージャーのインポートに失敗しました: {e}")
     sys.exit(1)
 
 # グローバル変数
@@ -33,6 +42,28 @@ manager = get_archive_manager()
 debug_mode = False
 all_entries: List[EntryInfo] = []
 
+# 現在のログレベル（デフォルトはERROR）
+current_log_level = ERROR
+
+def toggle_log_level():
+    """ログレベルを循環させる（ERROR → WARNING → INFO → DEBUG → ERROR ...）"""
+    global current_log_level
+    
+    if current_log_level == ERROR:
+        current_log_level = WARNING
+        print("ログレベル: WARNING")
+    elif current_log_level == WARNING:
+        current_log_level = INFO
+        print("ログレベル: INFO")
+    elif current_log_level == INFO:
+        current_log_level = DEBUG
+        print("ログレベル: DEBUG")
+    else:  # DEBUG
+        current_log_level = ERROR
+        print("ログレベル: ERROR")
+    
+    # ロギングシステムに新しいレベルを設定
+    setup_logging(current_log_level)
 
 def print_banner():
     """アプリケーションバナーを表示"""
@@ -77,11 +108,11 @@ def set_archive_path(path: str) -> bool:
     path = normalize_path(path)
     
     if not os.path.exists(path):
-        print(f"エラー: ファイルが見つかりません: {path}")
+        log_print(ERROR, f"エラー: ファイルが見つかりません: {path}")
         return False
         
     if not os.path.isfile(path) and not os.path.isdir(path):
-        print(f"エラー: 指定されたパスはファイルまたはディレクトリではありません: {path}")
+        log_print(ERROR, f"エラー: 指定されたパスはファイルまたはディレクトリではありません: {path}")
         return False
         
     try:
@@ -90,27 +121,27 @@ def set_archive_path(path: str) -> bool:
         
         # アーカイブファイルパスを設定
         current_archive_path = path
-        print(f"アーカイブを設定: {path}")
+        log_print(INFO, f"アーカイブを設定: {path}")
         
         if os.path.isfile(path):
-            print(f"ファイルサイズ: {os.path.getsize(path):,} バイト")
+            log_print(INFO, f"ファイルサイズ: {os.path.getsize(path):,} バイト")
         
         # マネージャーにカレントパスを設定
         if isinstance(manager, EnhancedArchiveManager):
             manager.set_current_path(path)
         all_entries = manager.get_entry_cache()
-        print(f"エントリ数: {len(all_entries.keys())}/{len(all_entries.values())}")
+        log_print(INFO, f"エントリ数: {len(all_entries.keys())}/{len(all_entries.values())}")
         # マネージャーがこのファイルを処理できるか確認
         handler_info = manager.get_handler(path)
         if handler_info:
             handler_name = handler_info.__class__.__name__
-            print(f"このファイルは '{handler_name}' で処理可能です")          
+            log_print(INFO, f"このファイルは '{handler_name}' で処理可能です")          
             return True
         else:
-            print(f"エラー: アーカイブマネージャーはこのファイルを処理できません: {path}")
+            log_print(ERROR, f"エラー: アーカイブマネージャーはこのファイルを処理できません: {path}")
             return False
     except Exception as e:
-        print(f"エラー: アーカイブの設定に失敗しました: {e}")
+        log_print(ERROR, f"エラー: アーカイブの設定に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
@@ -129,30 +160,30 @@ def list_archive_contents(internal_path: str = "") -> bool:
     global current_archive_path
     
     if not current_archive_path:
-        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
+        log_print(ERROR, "エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
         return False
     
     try:
         # 内部パスが指定された場合は正規化
         if internal_path:
             internal_path = normalize_path(internal_path)
-            print(f"パスの内容を取得中: {internal_path}")
+            log_print(INFO, f"パスの内容を取得中: {internal_path}")
             
             # 相対パスを使用してマネージャーから直接エントリを取得
             try:
                 entries = manager.list_entries(internal_path)
             except FileNotFoundError as e:
-                print(f"エラー: 指定されたパスが見つかりません: {internal_path}")
+                log_print(ERROR, f"エラー: 指定されたパスが見つかりません: {internal_path}")
                 if debug_mode:
                     traceback.print_exc()
                 return False
         else:
             # ルートの場合は空のパスを使用
-            print(f"アーカイブルートの内容を取得中")
+            log_print(INFO, f"アーカイブルートの内容を取得中")
             entries = manager.list_entries("")
         
         if not entries:
-            print(f"アーカイブ内にエントリが見つかりません")
+            log_print(INFO, f"アーカイブ内にエントリが見つかりません")
             return False
         
         # エントリを表示
@@ -172,7 +203,7 @@ def list_archive_contents(internal_path: str = "") -> bool:
         print(f"\n合計: {len(entries)} エントリ")
         return True
     except Exception as e:
-        print(f"エラー: アーカイブ内容の一覧取得に失敗しました: {e}")
+        log_print(ERROR, f"エラー: アーカイブ内容の一覧取得に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
@@ -191,12 +222,12 @@ def recursive_list_archive_contents(internal_path: str = "") -> bool:
     global current_archive_path
     
     if not current_archive_path:
-        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
+        log_print(ERROR, "エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
         return False
     try:       
         all_entries_dict = manager.get_entry_cache()
         if not all_entries_dict:
-            print(f"アーカイブ内にエントリが見つかりませんでした") 
+            log_print(INFO, f"アーカイブ内にエントリが見つかりませんでした") 
             return False
 
         # 辞書の値（EntryInfoのリスト）を連結してすべてのエントリを取得
@@ -204,7 +235,7 @@ def recursive_list_archive_contents(internal_path: str = "") -> bool:
         for entries_list in all_entries_dict.values():
             all_entries.extend(entries_list)
         if not all_entries:
-            print(f"アーカイブ内にエントリが見つかりませんでした")
+            log_print(INFO, f"アーカイブ内にエントリが見つかりませんでした")
             return False
         
         # エントリの種類を分類
@@ -250,7 +281,7 @@ def recursive_list_archive_contents(internal_path: str = "") -> bool:
         
         return True
     except Exception as e:
-        print(f"エラー: 再帰的なアーカイブ内容の探索に失敗しました: {e}")
+        log_print(ERROR, f"エラー: 再帰的なアーカイブ内容の探索に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
@@ -269,21 +300,21 @@ def extract_archive_file(file_path: str) -> bool:
     global current_archive_path
     
     if not current_archive_path:
-        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
+        log_print(ERROR, "エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
         return False
     
     try:
         file_path = normalize_path(file_path)
-        print(f"ファイル '{file_path}' を抽出中...")
+        log_print(INFO, f"ファイル '{file_path}' を抽出中...")
         
         # 相対パスを使用
         content = manager.read_file(file_path)
         
         if content is None:
-            print(f"エラー: ファイル '{file_path}' の読み込みに失敗しました")
+            log_print(ERROR, f"エラー: ファイル '{file_path}' の読み込みに失敗しました")
             return False
         
-        print(f"ファイルを読み込みました: {len(content):,} バイト")
+        log_print(INFO, f"ファイルを読み込みました: {len(content):,} バイト")
         
         # ファイル解析（バイナリ/テキスト判定）
         binary_bytes = 0
@@ -317,12 +348,12 @@ def extract_archive_file(file_path: str) -> bool:
                     try:
                         content.decode(enc)
                         encoding = enc
-                        print(f"エンコーディング検出: {encoding}")
+                        log_print(INFO, f"エンコーディング検出: {encoding}")
                         break
                     except UnicodeDecodeError:
                         pass
             
-            print(f"ファイルタイプ: テキストファイル ({encoding or '不明なエンコーディング'})")
+            log_print(INFO, f"ファイルタイプ: テキストファイル ({encoding or '不明なエンコーディング'})")
         else:
             # バイナリファイルのタイプ判定
             file_type = "バイナリファイル"
@@ -343,7 +374,7 @@ def extract_archive_file(file_path: str) -> bool:
             elif content.startswith(b'Rar!\x1a\x07'):
                 file_type = "RARアーカイブ"
                 
-            print(f"ファイルタイプ: {file_type}")
+            log_print(INFO, f"ファイルタイプ: {file_type}")
             
             # 画像ファイルの場合は、Pillowで追加情報を表示
             if "イメージ" in file_type:
@@ -362,9 +393,9 @@ def extract_archive_file(file_path: str) -> bool:
             try:
                 with open(save_path, 'wb') as f:
                     f.write(content)
-                print(f"ファイルを保存しました: {save_path} ({len(content):,} バイト)")
+                log_print(INFO, f"ファイルを保存しました: {save_path} ({len(content):,} バイト)")
             except Exception as e:
-                print(f"ファイル保存エラー: {e}")
+                log_print(ERROR, f"ファイル保存エラー: {e}")
                 if debug_mode:
                     traceback.print_exc()
                 
@@ -381,15 +412,15 @@ def extract_archive_file(file_path: str) -> bool:
                 else:
                     print(text)
             except Exception as e:
-                print(f"テキスト表示エラー: {e}")
+                log_print(ERROR, f"テキスト表示エラー: {e}")
         else:
-            print("バイナリファイルのため、内容表示はスキップします。")
+            log_print(INFO, "バイナリファイルのため、内容表示はスキップします。")
                 
         # テスト完了
-        print("\n抽出テスト完了！")
+        log_print(INFO, "\n抽出テスト完了！")
         return True
     except Exception as e:
-        print(f"エラー: ファイルの抽出に失敗しました: {e}")
+        log_print(ERROR, f"エラー: ファイルの抽出に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
@@ -409,8 +440,8 @@ def show_image_info(content: bytes) -> None:
             from PIL.ExifTags import TAGS
             from io import BytesIO
         except ImportError:
-            print("PIL(Pillow)がインストールされていません。画像情報を表示できません。")
-            print("pip install Pillow でインストールできます。")
+            log_print(ERROR, "PIL(Pillow)がインストールされていません。画像情報を表示できません。")
+            log_print(INFO, "pip install Pillow でインストールできます。")
             return
         
         # バイトデータから画像を開く
@@ -424,13 +455,13 @@ def show_image_info(content: bytes) -> None:
         
         # DPI情報があれば表示
         if 'dpi' in img.info:
-            print(f"解像度: {img.info['dpi']} DPI")
+            log_print(INFO, f"解像度: {img.info['dpi']} DPI")
             
         # EXIF情報があれば表示
         if hasattr(img, '_getexif') and img._getexif():
             exif = img._getexif()
             if exif:
-                print("\n[EXIF情報]")
+                log_print(INFO, "\n[EXIF情報]")
                 
                 # 主要なEXIF情報を表示
                 exif_data = {}
@@ -442,10 +473,10 @@ def show_image_info(content: bytes) -> None:
                 important_tags = ['Make', 'Model', 'DateTime', 'ExposureTime', 'FNumber', 'ISOSpeedRatings']
                 for tag in important_tags:
                     if tag in exif_data:
-                        print(f"{tag}: {exif_data[tag]}")
+                        log_print(INFO, f"{tag}: {exif_data[tag]}")
         
     except Exception as e:
-        print(f"画像情報の取得に失敗しました: {e}")
+        log_print(ERROR, f"画像情報の取得に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
 
@@ -460,27 +491,27 @@ def show_archive_info() -> bool:
     global current_archive_path
     
     if not current_archive_path:
-        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
+        log_print(ERROR, "エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
         return False
     
     try:
-        print(f"\nアーカイブ情報:")
-        print(f"パス: {current_archive_path}")
+        log_print(INFO, f"\nアーカイブ情報:")
+        log_print(INFO, f"パス: {current_archive_path}")
         
         # ファイル情報を取得
         if os.path.isfile(current_archive_path):
-            print(f"サイズ: {os.path.getsize(current_archive_path):,} バイト")
-            print(f"更新日時: {time.ctime(os.path.getmtime(current_archive_path))}")
+            log_print(INFO, f"サイズ: {os.path.getsize(current_archive_path):,} バイト")
+            log_print(INFO, f"更新日時: {time.ctime(os.path.getmtime(current_archive_path))}")
             
             # アーカイブエントリ数を取得
             entry_info = manager.get_entry_info(current_archive_path)
             if entry_info:
-                print(f"タイプ: {entry_info.type}")
+                log_print(INFO, f"タイプ: {entry_info.type}")
         
         # キャッシュされたエントリ一覧の統計
         if all_entries:
-            print(f"\nエントリ統計:")
-            print(f"合計エントリ数: {len(all_entries)}")
+            log_print(INFO, f"\nエントリ統計:")
+            log_print(INFO, f"合計エントリ数: {len(all_entries)}")
             
             # エントリタイプごとの集計
             type_counts = {}
@@ -491,7 +522,7 @@ def show_archive_info() -> bool:
                 type_counts[type_name] += 1
                 
             for type_name, count in sorted(type_counts.items()):
-                print(f"  {type_name}: {count} エントリ")
+                log_print(INFO, f"  {type_name}: {count} エントリ")
                 
             # サイズ統計（ファイルのみ）
             file_sizes = [entry.size for entry in all_entries if entry.type == EntryType.FILE]
@@ -500,20 +531,20 @@ def show_archive_info() -> bool:
                 avg_size = total_size / len(file_sizes)
                 max_size = max(file_sizes)
                 min_size = min(file_sizes)
-                print(f"\nファイルサイズ統計:")
-                print(f"  合計サイズ: {total_size:,} バイト")
-                print(f"  平均サイズ: {avg_size:,.2f} バイト")
-                print(f"  最大サイズ: {max_size:,} バイト")
-                print(f"  最小サイズ: {min_size:,} バイト")
+                log_print(INFO, f"\nファイルサイズ統計:")
+                log_print(INFO, f"  合計サイズ: {total_size:,} バイト")
+                log_print(INFO, f"  平均サイズ: {avg_size:,.2f} バイト")
+                log_print(INFO, f"  最大サイズ: {max_size:,} バイト")
+                log_print(INFO, f"  最小サイズ: {min_size:,} バイト")
                 
                 # 最大サイズのファイルを表示
                 largest_file = next((entry for entry in all_entries if entry.size == max_size), None)
                 if largest_file:
-                    print(f"  最大ファイル: {largest_file.name} ({max_size:,} バイト)")
+                    log_print(INFO, f"  最大ファイル: {largest_file.name} ({max_size:,} バイト)")
         
         return True
     except Exception as e:
-        print(f"エラー: アーカイブ情報の取得に失敗しました: {e}")
+        log_print(ERROR, f"エラー: アーカイブ情報の取得に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
@@ -529,32 +560,32 @@ def show_handlers_info() -> bool:
     try:
         # EnhancedArchiveManagerインスタンスからハンドラー情報を取得
         if not isinstance(manager, EnhancedArchiveManager):
-            print("エラー: マネージャーからハンドラー情報を取得できません")
+            log_print(ERROR, "エラー: マネージャーからハンドラー情報を取得できません")
             return False
         
-        print("\nハンドラー情報:")
+        log_print(INFO, "\nハンドラー情報:")
         handlers = manager.handlers
         
         if not handlers:
-            print("登録されているハンドラーがありません")
+            log_print(INFO, "登録されているハンドラーがありません")
             return True
             
         # 各ハンドラーの情報を表示
-        print("登録ハンドラー数:", len(handlers))
-        print("-" * 50)
+        log_print(INFO, "登録ハンドラー数:", len(handlers))
+        log_print(INFO, "-" * 50)
         
         for i, handler in enumerate(handlers):
             handler_name = handler.__class__.__name__
-            print(f"{i+1}. {handler_name}")
+            log_print(INFO, f"{i+1}. {handler_name}")
             
             # サポートしている拡張子
             if hasattr(handler, 'supported_extensions'):
                 exts = ", ".join(handler.supported_extensions)
-                print(f"   サポート拡張子: {exts}")
+                log_print(INFO, f"   サポート拡張子: {exts}")
                 
             # モジュール情報
             module_name = handler.__class__.__module__
-            print(f"   モジュール: {module_name}")
+            log_print(INFO, f"   モジュール: {module_name}")
             
             # ハンドラーの機能を確認
             caps = []
@@ -571,12 +602,12 @@ def show_handlers_info() -> bool:
             if hasattr(handler, 'read_file_from_bytes'):
                 caps.append("read_file_from_bytes")
             
-            print(f"   機能: {', '.join(caps)}")
-            print("-" * 50)
+            log_print(INFO, f"   機能: {', '.join(caps)}")
+            log_print(INFO, "-" * 50)
         
         return True
     except Exception as e:
-        print(f"エラー: ハンドラー情報の取得に失敗しました: {e}")
+        log_print(ERROR, f"エラー: ハンドラー情報の取得に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
@@ -592,14 +623,14 @@ def show_cached_entries() -> bool:
     global current_archive_path, manager
     
     if not current_archive_path:
-        print("エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
+        log_print(ERROR, "エラー: アーカイブが設定されていません。先に 'S <path>' コマンドを実行してください。")
         return False
     
     try:
         # キャッシュからエントリを取得
         all_entries_dict = manager.get_entry_cache()
         if not all_entries_dict:
-            print(f"キャッシュにエントリが見つかりませんでした。")
+            log_print(INFO, f"キャッシュにエントリが見つかりませんでした。")
             return False
         
         # すべてのキャッシュエントリを集める
@@ -610,7 +641,7 @@ def show_cached_entries() -> bool:
                     cached_entries.append(entry)
         
         if not cached_entries:
-            print("キャッシュを持つエントリはありません。")
+            log_print(INFO, "キャッシュを持つエントリはありません。")
             return False
         
         # キャッシュを持つエントリを表示
@@ -641,7 +672,7 @@ def show_cached_entries() -> bool:
         print(f"\n合計: {len(cached_entries)} エントリ")
         return True
     except Exception as e:
-        print(f"エラー: キャッシュエントリ表示に失敗しました: {e}")
+        log_print(ERROR, f"エラー: キャッシュエントリ表示に失敗しました: {e}")
         if debug_mode:
             traceback.print_exc()
         return False
@@ -652,7 +683,7 @@ def show_cached_entry_paths(manager):
     missmatch_count = 0
     if hasattr(manager, 'get_entry_cache'):
         cache = manager.get_entry_cache()
-        print(f"キャッシュされているエントリ数: {len(cache)}")
+        log_print(INFO, f"キャッシュされているエントリ数: {len(cache)}")
         
         # キャッシュキーをソート - 空文字列は最後に表示する
         sorted_keys = sorted(cache.keys(), key=lambda k: (k == "", k))
@@ -668,17 +699,17 @@ def show_cached_entry_paths(manager):
             else:
                 display_path = path
                 
-            print(f"  {idx:3d}. {display_path}: {entry.name} ({entry.type.name}) [rel_path=\"{entry.rel_path}\"]")
+            log_print(INFO, f"  {idx:3d}. {display_path}: {entry.name} ({entry.type.name}) [rel_path=\"{entry.rel_path}\"]")
             
             # キャッシュキーとrel_pathの不一致をチェック（末尾の/を考慮）
             normalized_rel_path = entry.rel_path.rstrip('/')
             if path != normalized_rel_path:
-                print(f"      ERROR: キーとrel_pathの不一致: キー=\"{path}\" vs rel_path=\"{entry.rel_path}\" (正規化後=\"{normalized_rel_path}\")")
+                log_print(ERROR, f"      ERROR: キーとrel_pathの不一致: キー=\"{path}\" vs rel_path=\"{entry.rel_path}\" (正規化後=\"{normalized_rel_path}\")")
                 missmatch_count += 1
         
-        print(f"\nキャッシュキーとrel_pathの不一致数: {missmatch_count}")
+        log_print(INFO, f"\nキャッシュキーとrel_pathの不一致数: {missmatch_count}")
     else:
-        print("キャッシュ機能が利用できません")
+        log_print(INFO, "キャッシュ機能が利用できません")
 
 
 def show_cached_recursive(manager, path="", prefix=""):
@@ -687,12 +718,12 @@ def show_cached_recursive(manager, path="", prefix=""):
     新しいキャッシュ形式（dict[str, EntryInfo]）に対応
     """
     if not hasattr(manager, 'get_entry_cache'):
-        print("このマネージャーはキャッシュ機能を持っていません")
+        log_print(INFO, "このマネージャーはキャッシュ機能を持っていません")
         return
     
     cache = manager.get_entry_cache()
     if not cache:
-        print("キャッシュが空です")
+        log_print(INFO, "キャッシュが空です")
         return
     
     # 検索パスの準備（末尾のスラッシュを確保）
@@ -716,14 +747,14 @@ def show_cached_recursive(manager, path="", prefix=""):
     # エントリを表示
     for entry in sorted(current_dir_entries, key=lambda e: e.name):
         if entry.type.name == "DIRECTORY":
-            print(f"{prefix}{entry.name}/")
+            log_print(INFO, f"{prefix}{entry.name}/")
             # 再帰的に子を表示
             next_path = f"{path}/{entry.name}" if path else entry.name
             show_cached_recursive(manager, next_path, prefix + "  ")
         elif entry.type.name == "ARCHIVE":
-            print(f"{prefix}{entry.name} [アーカイブ]")
+            log_print(INFO, f"{prefix}{entry.name} [アーカイブ]")
         else:
-            print(f"{prefix}{entry.name}")
+            log_print(INFO, f"{prefix}{entry.name}")
 
 
 def parse_command_args(args_str: str) -> str:
@@ -758,6 +789,18 @@ def main():
     print_banner()
     print_help()
     
+    # ロギングを設定（デフォルトはERRORレベル）
+    setup_logging(current_log_level)
+    
+    # 現在のログレベルを表示（起動時のレベル確認用）
+    level_names = {
+        ERROR: "ERROR",
+        WARNING: "WARNING", 
+        INFO: "INFO",
+        DEBUG: "DEBUG"
+    }
+    print(f"起動時のログレベル: {level_names.get(current_log_level, 'UNKNOWN')}")
+    
     # コマンドループ
     while True:
         try:
@@ -770,7 +813,7 @@ def main():
             
             # コマンド処理
             if cmd == 'Q':
-                print("終了します。")
+                log_print(INFO, "終了します。")
                 break
             elif cmd == '?':
                 print_help()
@@ -779,6 +822,10 @@ def main():
                 continue
             elif cmd == 'RC':
                 show_cached_entries()
+                continue
+            elif cmd == 'D':
+                # dコマンドでログレベル切り替え
+                toggle_log_level()
                 continue
                 
             # 単一文字コマンドとその引数の処理
@@ -790,8 +837,8 @@ def main():
             
             if cmd == 'S':
                 if not args:
-                    print("エラー: アーカイブパスを指定してください。例: S /path/to/archive.zip")
-                    print("       空白を含むパスは S \"C:/Program Files/file.zip\" のように指定してください")
+                    log_print(ERROR, "エラー: アーカイブパスを指定してください。例: S /path/to/archive.zip")
+                    log_print(INFO, "       空白を含むパスは S \"C:/Program Files/file.zip\" のように指定してください")
                 else:
                     set_archive_path(args)
             elif cmd == 'L':
@@ -800,27 +847,24 @@ def main():
                 recursive_list_archive_contents(args)
             elif cmd == 'E':
                 if not args:
-                    print("エラー: 抽出するファイルのパスを指定してください。例: E document.txt")
-                    print("       空白を含むパスは E \"folder/my document.txt\" のように指定してください")
+                    log_print(ERROR, "エラー: 抽出するファイルのパスを指定してください。例: E document.txt")
+                    log_print(INFO, "       空白を含むパスは E \"folder/my document.txt\" のように指定してください")
                 else:
                     extract_archive_file(args)
             elif cmd == 'I':
                 show_archive_info()
             elif cmd == 'H':
                 show_handlers_info()
-            elif cmd == 'D':
-                debug_mode = not debug_mode
-                print(f"デバッグモード: {'オン' if debug_mode else 'オフ'}")
             else:
-                print(f"未知のコマンド: {cmd_input}。'?'と入力してヘルプを表示してください。")
+                log_print(ERROR, f"未知のコマンド: {cmd_input}。'?'と入力してヘルプを表示してください。")
                 
         except KeyboardInterrupt:
-            print("\n中断されました。終了するには 'Q' を入力してください。")
+            log_print(INFO, "\n中断されました。終了するには 'Q' を入力してください。")
         except EOFError:
-            print("\n終了します。")
+            log_print(INFO, "\n終了します。")
             break
         except Exception as e:
-            print(f"エラー: {e}")
+            log_print(ERROR, f"エラー: {e}")
             if debug_mode:
                 traceback.print_exc()
 
@@ -835,7 +879,7 @@ if __name__ == "__main__":
     
     if args.debug:
         debug_mode = True
-        print("デバッグモードを有効化しました。")
+        log_print(INFO, "デバッグモードを有効化しました。")
     
     # ファイルが指定されていれば開く
     if args.archive:

@@ -3,12 +3,13 @@
 
 アーカイブハンドラの抽象基底クラスを定義
 """
-
 import os
 import tempfile
 from typing import List, Optional, BinaryIO, Dict, Any
 
 from ..arc import EntryInfo, EntryType
+# loggingモジュールからlogutilsへの参照変更
+from logutils import log_print, log_trace, DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 
 class ArchiveHandler:
@@ -26,6 +27,45 @@ class ArchiveHandler:
         """ハンドラを初期化する"""
         self.current_path = ""
     
+    def debug_print(self, message: Any, *args, level: int = INFO, trace: bool = False, **kwargs):
+        """
+        デバッグ出力のラッパーメソッド
+        
+        Args:
+            message: 出力するメッセージ
+            *args: メッセージのフォーマット用引数
+            level: ログレベル（デフォルトはINFO）
+            trace: Trueならスタックトレース情報も出力する（デフォルトはFalse）
+            **kwargs: 追加のキーワード引数
+        """
+        # クラス名をログの名前空間として使用
+        name = f"arc.handler.{self.__class__.__name__}"
+        
+        if trace:
+            log_trace(None, level, message, *args, name=name, **kwargs)
+        else:
+            log_print(level, message, *args, name=name, **kwargs)
+    
+    def debug_debug(self, message: Any, *args, trace: bool = False, **kwargs):
+        """DEBUGレベルのログ出力"""
+        self.debug_print(message, *args, level=DEBUG, trace=trace, **kwargs)
+    
+    def debug_info(self, message: Any, *args, trace: bool = False, **kwargs):
+        """INFOレベルのログ出力"""
+        self.debug_print(message, *args, level=INFO, trace=trace, **kwargs)
+    
+    def debug_warning(self, message: Any, *args, trace: bool = False, **kwargs):
+        """WARNINGレベルのログ出力"""
+        self.debug_print(message, *args, level=WARNING, trace=trace, **kwargs)
+    
+    def debug_error(self, message: Any, *args, trace: bool = False, **kwargs):
+        """ERRORレベルのログ出力"""
+        self.debug_print(message, *args, level=ERROR, trace=trace, **kwargs)
+        
+    def debug_critical(self, message: Any, *args, trace: bool = False, **kwargs):
+        """CRITICALレベルのログ出力"""
+        self.debug_print(message, *args, level=CRITICAL, trace=trace, **kwargs)
+
     def set_current_path(self, path: str) -> None:
         """
         現在のベースパスを設定する
@@ -250,7 +290,7 @@ class ArchiveHandler:
             
             return temp_path.replace('\\', '/')
         except Exception as e:
-            print(f"一時ファイル作成エラー: {e}")
+            self.debug_error(f"一時ファイル作成エラー: {e}")
             return ""
     
     def cleanup_temp_file(self, filepath: str) -> None:
@@ -265,7 +305,7 @@ class ArchiveHandler:
                 os.unlink(filepath)
             except Exception as e:
                 if self.debug:
-                    print(f"一時ファイルの削除に失敗しました: {e}")
+                    self.debug_error(f"一時ファイルの削除に失敗しました: {e}")
 
     @staticmethod
     def normalize_path(path: str) -> str:
