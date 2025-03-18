@@ -17,6 +17,9 @@ except ImportError as e:
     print(f"エラー: 必要なライブラリの読み込みに失敗しました: {e}")
     sys.exit(1)
 
+# 自然順ソートユーティリティをインポート
+from ..utils.sort import natural_sort_key, get_stable_sort_key
+
 
 class FileListModel(QStandardItemModel):
     """ファイルとフォルダを表示するためのモデル"""
@@ -103,7 +106,7 @@ class FileListModel(QStandardItemModel):
             item_obj.setData(item_type, Qt.UserRole + 5)  # エントリタイプ
             
             # 自然順ソート用のキー（アイテム名を数値と文字列に分解）
-            sort_key = self._natural_sort_key(name)
+            sort_key = natural_sort_key(name)
             item_obj.setData(sort_key, Qt.UserRole + 6)
             
             # ツールチップにタイプ情報を追加
@@ -123,10 +126,9 @@ class FileListModel(QStandardItemModel):
                 files.append(item_obj)
         
         # 各カテゴリごとに自然順ソートして追加
-        # カスタム比較関数を使用して型の不一致を処理
-        sorted_dirs = sorted(directories, key=lambda x: self._get_natural_sort_key(x.data(Qt.UserRole + 6)))
-        sorted_archives = sorted(archives, key=lambda x: self._get_natural_sort_key(x.data(Qt.UserRole + 6)))
-        sorted_files = sorted(files, key=lambda x: self._get_natural_sort_key(x.data(Qt.UserRole + 6)))
+        sorted_dirs = sorted(directories, key=lambda x: get_stable_sort_key(x.data(Qt.UserRole + 6)))
+        sorted_archives = sorted(archives, key=lambda x: get_stable_sort_key(x.data(Qt.UserRole + 6)))
+        sorted_files = sorted(files, key=lambda x: get_stable_sort_key(x.data(Qt.UserRole + 6)))
         
         # アイテムを順番に追加（フォルダ → アーカイブ → ファイル）
         for item_obj in sorted_dirs + sorted_archives + sorted_files:

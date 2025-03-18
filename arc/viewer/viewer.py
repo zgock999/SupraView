@@ -19,10 +19,10 @@ from logutils import setup_logging, log_print, log_trace, DEBUG, INFO, WARNING, 
 try:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout,
-        QStatusBar, QMessageBox, QMenuBar, QMenu, QToolBar, QFileDialog
+        QStatusBar, QMessageBox
     )
     from PySide6.QtCore import Qt, QSize
-    from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QAction
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
 except ImportError:
     log_print(ERROR, "PySide6が必要です。pip install pyside6 でインストールしてください。")
     sys.exit(1)
@@ -33,7 +33,7 @@ from .widgets.file_list_view import FileListView
 from .widgets.path_navigation import PathNavigationBar
 from .actions.file_actions import FileActionHandler
 from .debug_utils import ViewerDebugMixin
-
+from .menu.context import ViewerContextMenu
 
 class ViewerWindow(QMainWindow, ViewerDebugMixin):
     """アーカイブビューアのメインウィンドウ"""
@@ -59,12 +59,18 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
             setup_logging(DEBUG)  # INFOからDEBUGに変更
             self.debug_info("デバッグモードで起動しました")
         
-        # UI初期化
+        # UI初期化（メニュー設定呼び出しを削除）
         self._setup_ui()
-        self._setup_menu()
         
         # イベントハンドラとコールバックの接続
         self._connect_signals()
+        
+        # コンテキストメニューの初期化（ナビゲーションコールバックを追加）
+        self.context_menu = ViewerContextMenu(
+            self, 
+            self._handle_open_path,
+            self._handle_navigate_to_folder
+        )
         
         # ステータスバーの初期メッセージ
         if debug_mode:
@@ -97,41 +103,6 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
         # 中央ウィジェットを設定
         self.setCentralWidget(central_widget)
     
-    def _setup_menu(self):
-        """メニューの設定"""
-        # メニューバーの作成
-        menu_bar = QMenuBar(self)
-        self.setMenuBar(menu_bar)
-        
-        # ファイルメニュー
-        file_menu = QMenu("ファイル(&F)", self)
-        menu_bar.addMenu(file_menu)
-        
-        # 開くアクション
-        open_action = QAction("開く(&O)...", self)
-        open_action.setShortcut(QKeySequence.Open)
-        open_action.triggered.connect(self._open_file_dialog)
-        file_menu.addAction(open_action)
-        
-        file_menu.addSeparator()
-        
-        # 終了アクション
-        exit_action = QAction("終了(&X)", self)
-        exit_action.setShortcut("Alt+F4")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-        
-        # 表示メニュー
-        view_menu = QMenu("表示(&V)", self)
-        menu_bar.addMenu(view_menu)
-        
-        # デバッグモードの切り替え
-        debug_action = QAction("デバッグモード(&D)", self)
-        debug_action.setCheckable(True)
-        debug_action.setChecked(self.file_action_handler.debug_mode)
-        debug_action.triggered.connect(self._toggle_debug_mode)
-        view_menu.addAction(debug_action)
-    
     def _connect_signals(self):
         """シグナルとスロットの接続"""
         # パスナビゲーションバーのパス変更シグナル
@@ -149,17 +120,15 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
         self.file_action_handler.on_loading_start = self._handle_loading_start
         self.file_action_handler.on_loading_end = self._handle_loading_end
     
+    def contextMenuEvent(self, event):
+        """コンテキストメニューイベント処理"""
+        # メインウィンドウの空白部分でコンテキストメニューを表示
+        self.context_menu.show(event.globalPos())
+    
     def _open_file_dialog(self):
         """ファイル選択ダイアログを開く"""
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "アーカイブを開く",
-            "",
-            "すべてのファイル (*.*)"
-        )
-        
-        if path:
-            self._handle_open_path(path)
+        # 書庫を開くダイアログを使用する
+        self.context_menu._on_open_archive()
     
     def _toggle_debug_mode(self, checked: bool):
         """デバッグモードの切り替え"""
@@ -195,6 +164,11 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
         if success:
             # ウィンドウタイトルを更新
             self.setWindowTitle(f"SupraView - {os.path.basename(path)}")
+            
+            # アーカイブオープン成功後にキャッシュからすべてのフォルダを取得してメニューを更新
+            entry_cache = self.archive_manager.get_entry_cache()
+            self.context_menu.update_from_cache(entry_cache)
+            
             self.debug_info(f"パスの読み込み成功: {path}")
         else:
             self.debug_error(f"パスの読み込み失敗: {path}")
@@ -219,6 +193,16 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
         # ルートディレクトリかどうかを判定
         in_root = self.archive_manager.current_directory == ""
         self.file_view.file_model.set_items(items, in_root=in_root)
+    
+    def _handle_navigate_to_folder(self, path: str):
+        """
+        フォルダメニューからのナビゲーションハンドラ
+        
+        Args:
+            path: 移動先のフォルダパス
+        """
+        self.debug_info(f"フォルダメニューからのナビゲーション: '{path}'")
+        self.file_action_handler.navigate_to(path)
     
     def _handle_path_changed(self, display_path: str, rel_path: str = ""):
         """

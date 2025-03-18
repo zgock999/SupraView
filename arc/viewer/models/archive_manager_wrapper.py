@@ -169,7 +169,7 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
             path = normalize_path(path)
             self.debug_info(f"ディレクトリ変更: '{path}'")
             
-            # 特殊なパス処理
+            # 特殊なパス処理は維持（基本的なナビゲーション機能）
             if path == "." or path == "":
                 # 現在のディレクトリのまま
                 return True
@@ -199,44 +199,13 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
                 new_path = path[1:] if len(path) > 1 else ""
                 self.debug_info(f"絶対パスが指定されました: {path} -> {new_path}")
             else:
-                # ここが問題: 相対パスを現在のディレクトリと結合しない
-                # FileActionHandlerからは完全な相対パスが渡されるため、結合は不要
                 new_path = path
                 self.debug_info(f"相対パスをそのまま使用: {path}")
             
             # パスの正規化
             new_path = normalize_path(new_path)
-            self.debug_info(f"正規化されたパス: '{new_path}'")
             
-            # ディレクトリが存在するかチェック
-            if new_path == "":
-                # ルートディレクトリ（空文字列）の場合は確認不要
-                self.debug_info("ルートディレクトリに移動")
-            else:
-                # キャッシュを使用して存在確認
-                cache = self._manager.get_entry_cache()
-                
-                # ターゲットがキャッシュにある場合
-                if new_path in cache:
-                    self.debug_info(f"キャッシュにエントリが見つかりました: '{new_path}'")
-                else:
-                    # 親ディレクトリと子ディレクトリ名を抽出
-                    if '/' in new_path:
-                        parent_path, target_name = new_path.rsplit('/', 1)
-                    else:
-                        parent_path, target_name = "", new_path
-                    
-                    # 親ディレクトリのエントリを取得して確認
-                    try:
-                        entries = self._manager.list_entries(parent_path)
-                        if not any(e.name == target_name and (e.type == EntryType.DIRECTORY or e.type == EntryType.ARCHIVE) for e in entries):
-                            self.debug_error(f"ディレクトリが存在しません: '{new_path}' (親: '{parent_path}', 名前: '{target_name}')")
-                            return False
-                        self.debug_info(f"ディレクトリの存在を確認: '{new_path}'")
-                    except Exception as e:
-                        self.debug_error(f"ディレクトリの存在確認でエラー: {e}", trace=self._debug_mode)
-                        return False
-            
+            # 存在チェックは行わない - マネージャーに任せる
             # 新しいパスを設定
             self._current_directory = new_path
             self.debug_info(f"カレントディレクトリを変更しました: '{self._current_directory}'")
@@ -267,10 +236,16 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
         
         if not self._current_directory:
             return self._current_path
-                    
-        # アーカイブかどうかの判定
-        entry_info = self.get_entry_info(self._current_path)
-        is_archive = entry_info and entry_info.type == EntryType.ARCHIVE
+        
+        # キャッシュから現在のパスのエントリ情報を取得
+        cache = self.get_entry_cache()
+        root_entry = cache.get("", None) if cache else None
+        
+        # エントリ情報からアーカイブかどうかを判断
+        # EntryType.ARCHIVE または既知のアーカイブ拡張子でチェック
+        is_archive = False
+        if root_entry and hasattr(root_entry, 'type'):
+            is_archive = root_entry.type == EntryType.ARCHIVE
         
         # アーカイブ内パスの場合は特殊なセパレータを使用
         if is_archive:
@@ -284,23 +259,17 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
         ファイルの内容を抽出
         
         Args:
-            file_path: カレントディレクトリからの相対ファイルパス
+            file_path: ファイルパス (カレントディレクトリからの相対パス)
             
         Returns:
             Optional[bytes]: ファイルの内容、失敗した場合はNone
         """
         try:
-            # カレントディレクトリとの結合パスを作成
-            if self._current_directory:
-                full_path = os.path.join(self._current_directory, file_path)
-            else:
-                full_path = file_path
-                
-            # パスを正規化（ベースパスからの相対パス）
-            full_path = normalize_path(full_path)
+            # パスを正規化（カレントディレクトリと結合する必要はない）
+            norm_path = normalize_path(file_path)
             
-            self.debug_info(f"ファイルを読み込み中: {full_path} (ベースパスからの相対パス)")
-            return self._manager.read_file(full_path)
+            self.debug_info(f"ファイルを読み込み中: {norm_path} (相対パス)")
+            return self._manager.read_file(norm_path)
         except Exception as e:
             self.debug_error(f"ファイルの読み込みに失敗しました: {file_path} - {e}", trace=self._debug_mode)
             return None
@@ -343,6 +312,15 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
         Returns:
             Dict[str, Any]: アーカイブ情報
         """
+        # マネージャーが直接アーカイブ情報を提供するメソッドを持っていればそれを使う
+        if hasattr(self._manager, 'get_archive_info'):
+            try:
+                return self._manager.get_archive_info()
+            except Exception as e:
+                if self._debug_mode:
+                    self.debug_error(f"アーカイブ情報取得中のエラー: {e}", trace=True)
+        
+        # なければ基本情報のみ返す
         result = {
             'path': self._current_path,
             'entries': 0,
@@ -351,35 +329,15 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
             'type': '',
         }
         
-        if not self._current_path:
-            return result
-                
+        # マネージャーからエントリ数を取得（シンプルな処理）
         try:
-            # エントリ情報を取得
-            entry_info = self.get_entry_info(self._current_path)
-            
-            if entry_info:
-                # エントリタイプを設定
-                result['type'] = entry_info.type.name
-                
-                # サイズ情報
-                if hasattr(entry_info, 'size') and entry_info.size is not None:
-                    result['size'] = entry_info.size
-                
-                # 日時情報
-                if hasattr(entry_info, 'modified_time') and entry_info.modified_time:
-                    result['modified'] = entry_info.modified_time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # キャッシュからエントリ数を取得（シンプルに辞書のキー数を利用）
             cache = self.get_entry_cache()
             if cache:
                 result['entries'] = len(cache)
+        except Exception:
+            pass
             
-            return result
-        except Exception as e:
-            if self._debug_mode:
-                self.debug_error(f"アーカイブ情報取得中のエラー: {e}", trace=True)
-            return result
+        return result
     
     def close(self) -> None:
         """現在開いているアーカイブまたはディレクトリを閉じる"""

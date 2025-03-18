@@ -142,72 +142,24 @@ class FileActionHandler(ViewerDebugMixin):
             bool: 成功したかどうか
         """
         # 最初のみ許可される絶対パス（ドロップ/オープン時）
-        if not self.archive_manager.current_path and os.path.exists(path):
-            return self.open_path(path)
-            
-        # アーカイブが開かれていない場合
         if not self.archive_manager.current_path:
-            self._show_error("ナビゲーションエラー", "先にアーカイブやフォルダを開いてください")
-            return False
-
-        # パス文字列からベースパスの部分を除去して内部パスを抽出
-        internal_path = self._extract_internal_path(path)
-        if internal_path is None:
-            self._show_error("ナビゲーションエラー", f"無効なパス形式です: {path}")
-            self.debug_error(f"無効なパス形式: {path}")
-            return False
+            return self.open_path(path)
         
         # 内部パスに対して処理
-        if ':/' in internal_path:
-            # コロンが含まれる場合は絶対パスの一部と判断し、エラー
-            self.debug_error(f"不正なパス形式（コロンを含む）: {internal_path}")
-            self._show_error("ナビゲーションエラー", f"無効なパス形式です: {internal_path}")
-            return False
-        
-        # 相対パスとして処理
-        return self._navigate_internal(internal_path)
-    
-    def _extract_internal_path(self, path: str) -> Optional[str]:
-        """
-        表示用パスから内部相対パスを抽出する
-        
-        Args:
-            path: 表示用パス
-            
-        Returns:
-            Optional[str]: 内部相対パス、抽出できない場合はNone
-        """
-        # 相対パスの場合はそのまま返す
-        if not path.startswith('/') and not ':/' in path:
-            return path
-            
-        # ベースパスを取得
-        base_path = self.archive_manager.current_path
-        
-        # アーカイブ内パス形式 "basepath:/internalpath" を処理
         if ':/' in path:
+            # アーカイブ内のパス表記からの相対パス抽出
             parts = path.split(':', 1)
             if len(parts) == 2 and parts[1].startswith('/'):
-                # 先頭の / を除去
-                return parts[1][1:] if len(parts[1]) > 1 else ""
+                # 先頭の / を除去して相対パス化
+                rel_path = parts[1][1:] if len(parts[1]) > 1 else ""
+                return self._navigate_internal(rel_path)
+        elif path.startswith('/'):
+            # 絶対パス形式なら先頭の / を除去
+            rel_path = path[1:] if len(path) > 1 else ""
+            return self._navigate_internal(rel_path)
         
-        # 物理フォルダのパスを処理
-        if path.startswith(base_path):
-            if path == base_path:
-                # ベースパスと同じなら空文字（ルート）を返す
-                return ""
-            
-            # ベースパスより長いかを確認
-            if len(path) > len(base_path):
-                # ベースパスの後に / または \ がある場合は1文字多く除去
-                sep_pos = len(base_path)
-                if path[sep_pos] in ['/', '\\']:
-                    sep_pos += 1
-                # ベースパスを除去して相対パスを返す
-                return path[sep_pos:]
-        
-        # マッチしない場合はNoneを返す
-        return None
+        # 相対パスはそのまま処理
+        return self._navigate_internal(path)
     
     def _navigate_internal(self, path: str) -> bool:
         """
@@ -231,7 +183,7 @@ class FileActionHandler(ViewerDebugMixin):
             # UIの更新を待つために、イベントループを一度処理する
             QApplication.processEvents()
             
-            # ディレクトリ変更（必ず相対パスとして扱う）
+            # ディレクトリ変更（直接ラッパーに委任）
             success = self.archive_manager.change_directory(path)
             if not success:
                 self._show_error("ナビゲーションエラー", f"指定されたパスに移動できませんでした: {path}")
@@ -242,9 +194,9 @@ class FileActionHandler(ViewerDebugMixin):
             
             # パス変更を通知（相対パスのみ）
             if self.on_path_changed:
-                # 現在の相対パスを通知（表示用と内部パスは同じ）
+                # 現在の相対パスを通知
                 rel_path = self.archive_manager.current_directory
-                display_path = self.archive_manager.get_full_path()  # 以前のコードとの互換性のため残す
+                display_path = self.archive_manager.get_full_path()
                 self.on_path_changed(display_path, rel_path)
             
             return True
@@ -306,10 +258,42 @@ class FileActionHandler(ViewerDebugMixin):
                 return False
         else:
             # ファイルの場合のアクション
-            if self.on_status_message:
-                self.on_status_message(f"ファイル '{name}' を選択しました")
-            # TODO: ファイルプレビューの実装
-            return True
+            try:
+                # ステータスメッセージを更新
+                self.on_status_message(f"ファイル '{name}' を読み込んでいます...")
+                
+                # UIの更新を待つためにイベントループを処理
+                QApplication.processEvents()
+                
+                # ファイルの内容を読み込む
+                file_data = self.archive_manager.extract_file(name)
+                if file_data is None:
+                    self._show_error("ファイル読み込みエラー", f"ファイル '{name}' を読み込めませんでした")
+                    return False
+                
+                # HexDumpViewをインポート（ここでインポートして循環参照を防ぐ）
+                from ..widgets.hexdump import HexDumpView
+                
+                # 16進数ダンプビューウィンドウを作成
+                hex_view = HexDumpView(
+                    parent=self.parent_widget,
+                    title=f"16進数ダンプ: {name}",
+                    bytes_data=file_data
+                )
+                
+                # ウィンドウを表示
+                hex_view.show()
+                
+                # ステータスメッセージを更新
+                self.on_status_message(f"ファイル '{name}' を読み込みました ({len(file_data):,} バイト)")
+                return True
+                
+            except Exception as e:
+                self._show_error("ファイルエラー", f"ファイルの処理中にエラーが発生しました:\n{str(e)}")
+                if self.debug_mode:
+                    import traceback
+                    traceback.print_exc()
+                return False
     
     def _load_current_directory(self) -> bool:
         """
