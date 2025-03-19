@@ -36,7 +36,7 @@ def create_archive_manager():
         設定済みの新しいアーカイブマネージャー
     """
     # ここで直接 EnhancedArchiveManager をインポート (循環参照を避けるため遅延インポート)
-    from .manager.enhanced import EnhancedArchiveManager
+    from .manager.enhanced import EnhancedArchiveManager  # slimからenhancedに戻す
     from .handlers import register_standard_handlers
     
     # 強化版のマネージャーを使用
