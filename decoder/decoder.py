@@ -1,49 +1,43 @@
 """
-画像デコーダーの基底クラス
+デコーダーの基本インターフェース
 
-バイトデータを numpy 配列の画像データに変換するための抽象基底クラス
-各具体的なデコーダークラスはこのクラスを継承して実装する
+画像デコーダーが実装すべき基本インターフェース
 """
 
-from abc import ABC, abstractmethod
-import numpy as np
 from typing import List, Optional, Tuple
+import numpy as np
 
+from .base import BaseDecoder
 
-class ImageDecoder(ABC):
+class ImageDecoder(BaseDecoder):
     """
-    画像デコーダーの基底クラス
+    画像デコーダーの基本クラス
     
-    バイトデータから画像の numpy 配列を生成する機能を提供する
-    サポートする拡張子のリストを返すプロパティを持つ
+    すべての画像デコーダーの基底クラス
     """
     
     @property
-    @abstractmethod
     def supported_extensions(self) -> List[str]:
         """
         このデコーダーがサポートするファイル拡張子のリスト
         
         Returns:
-            List[str]: サポートする拡張子のリスト（例: ['.jpg', '.jpeg']）
+            List[str]: サポートされている拡張子のリスト（ドット付き）
         """
-        pass
+        return []
     
-    @abstractmethod
     def decode(self, data: bytes) -> Optional[np.ndarray]:
         """
-        バイトデータを numpy 配列の画像に変換する
+        バイトデータから画像をデコード
         
         Args:
-            data (bytes): デコードする画像のバイトデータ
+            data: デコードする画像のバイトデータ
             
         Returns:
-            Optional[np.ndarray]: デコードされた画像の numpy 配列、失敗した場合は None
-                                  形状は (height, width, channels) の順
+            Optional[np.ndarray]: デコードされた画像のnumpy配列、失敗した場合はNone
         """
-        pass
+        raise NotImplementedError("子クラスでオーバーライドする必要があります")
     
-    @abstractmethod
     def get_image_info(self, data: bytes) -> Optional[Tuple[int, int, int]]:
         """
         画像の基本情報を取得する
