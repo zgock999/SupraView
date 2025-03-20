@@ -102,7 +102,12 @@ class ArchiveProcessor:
             # アーカイブタイプのエントリをマーク
             marked_entries = self._mark_archive_entries(entries)
             
-            self._manager.debug_info(f"物理アーカイブから {len(marked_entries)} エントリを取得")
+            # 修正: エントリをキャッシュに登録する
+            for entry in marked_entries:
+                self._manager.debug_debug(f"物理アーカイブから取得したエントリをキャッシュに追加: {entry.name} ({entry.type.name}) rel_path=\"{entry.rel_path}\"")
+                self._manager._entry_cache.add_entry_to_cache(entry)
+            
+            self._manager.debug_info(f"物理アーカイブから {len(marked_entries)} エントリを取得してキャッシュに登録")
             return marked_entries
             
         except Exception as e:
@@ -296,6 +301,9 @@ class ArchiveProcessor:
             # エントリをファイナライズ
             finalized_entry = self._manager.finalize_entry(new_entry, arc_entry.path)
             result_entries.append(finalized_entry)
+            
+            # デバッグ用：エントリタイプを確認
+            self._manager.debug_debug(f"エントリをキャッシュに追加: {finalized_entry.name} ({finalized_entry.type.name}) rel_path=\"{finalized_entry.rel_path}\"")
             
             # エントリをキャッシュに追加
             self._manager._entry_cache.add_entry_to_cache(finalized_entry)

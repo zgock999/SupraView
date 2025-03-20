@@ -81,8 +81,13 @@ class EntryCacheManager:
         """
         # キャッシュキーとして末尾の/を取り除いた相対パスを使用
         cache_key = entry.rel_path.rstrip('/')
-        self._all_entries[cache_key] = entry
-        self._manager.debug_debug(f"エントリ {cache_key} をキャッシュに登録")
+        
+        # old_enhanced.pyと同じ条件を使用して、空文字列キーも確実に登録
+        if cache_key or cache_key == "":  # 空文字列キー（ルート）も登録可能に
+            self._all_entries[cache_key] = entry
+            self._manager.debug_debug(f"エントリ \"{cache_key}\" をキャッシュに登録: {entry.name} ({entry.type.name})")
+        else:
+            self._manager.debug_warning(f"キャッシュキーが空のためエントリを登録しません: {entry.name} ({entry.type.name})")
     
     def clear_cache(self) -> None:
         """キャッシュをクリアする"""
@@ -147,15 +152,24 @@ class EntryCacheManager:
         
         if is_root:
             # ルートの場合、直接の子エントリのみを返す
+            seen_paths = set()  # 重複回避用
+            
             for entry_key, entry in self._all_entries.items():
-                if entry_key and '/' not in entry_key:
-                    result.append(entry)
-                    self._manager.debug_info(f"  発見 (ルート直下): {entry.name}")
+                # EntryInfoオブジェクトの場合のみ処理
+                if isinstance(entry, EntryInfo):
+                    # 修正：キャッシュのキーを使って子エントリかどうかを判断
+                    # 1. キーが空文字でない（ルートエントリ自身を除外）
+                    # 2. キーに'/'が含まれていない（直接の子のみ）
+                    if entry_key != "" and '/' not in entry_key:
+                        if entry.path not in seen_paths:
+                            result.append(entry)
+                            seen_paths.add(entry.path)
+                            self._manager.debug_info(f"  発見 (ルート直下): {entry.name} ({entry.rel_path})")
         else:
             # ファイルエントリかどうかのチェック
             if norm_path in self._all_entries:
                 entry = self._all_entries[norm_path]
-                if entry.type == EntryType.FILE:
+                if isinstance(entry, EntryInfo) and entry.type == EntryType.FILE:
                     if original_path.endswith('/') or original_path.endswith('\\'):
                         self._manager.debug_error(f"ファイルパスの末尾にスラッシュがあります: {original_path}")
                         raise ValueError(f"ファイルパス '{original_path}' の末尾にスラッシュがあります。")
@@ -164,14 +178,26 @@ class EntryCacheManager:
             # ディレクトリ/アーカイブの子エントリを検索
             if norm_path in self._all_entries:
                 parent_entry = self._all_entries[norm_path]
-                if parent_entry.type in [EntryType.DIRECTORY, EntryType.ARCHIVE]:
+                if isinstance(parent_entry, EntryInfo) and parent_entry.type in [EntryType.DIRECTORY, EntryType.ARCHIVE]:
+                    # 重複回避用のセット
+                    seen_paths = set()
+                    # パスプレフィックスを構築（明示的に'/'を使用）
                     prefix = f"{norm_path}/"
+                    
                     for child_key, child_entry in self._all_entries.items():
-                        if child_key != norm_path and child_key.startswith(prefix):
-                            rest_path = child_key[len(prefix):]
-                            if '/' not in rest_path:
-                                result.append(child_entry)
-                                self._manager.debug_info(f"  発見: {child_entry.name}")
+                        if isinstance(child_entry, EntryInfo):
+                            # このパスの子エントリかどうかを正確に判断
+                            # 1. エントリがディレクトリ自体でないこと
+                            # 2. エントリキーがプレフィックスで始まること
+                            if (child_key != norm_path and child_key.startswith(prefix)):
+                                # プレフィックス後の部分を抽出
+                                rest_path = child_key[len(prefix):]
+                                # 直接の子エントリ（それ以上ネストしていない）のみを対象
+                                if '/' not in rest_path:
+                                    if child_entry.path not in seen_paths:
+                                        result.append(child_entry)
+                                        seen_paths.add(child_entry.path)
+                                        self._manager.debug_info(f"  発見: {child_entry.name} ({child_entry.rel_path})")
                     return result
             
             # 見つからない場合

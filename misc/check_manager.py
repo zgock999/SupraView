@@ -16,16 +16,13 @@ from typing import List, Optional, Dict, Any
 
 # 親ディレクトリをPythonパスに追加して、プロジェクトのモジュールをインポートできるようにする
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if project_root not in sys.path:
+if (project_root not in sys.path):
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
 # モジュールをインポート - パス設定後にインポートするように移動
 from logutils import setup_logging, log_print, log_trace, DEBUG, INFO, WARNING, ERROR, CRITICAL
-from arc.manager.enhanced import EnhancedArchiveManager
-from arc.handler.fs_handler import FileSystemHandler
-from arc.handler.zip_handler import ZipHandler
-from arc.handler.rar_handler import RarHandler
+
 from arc.interface import get_archive_manager  # interfaceモジュールからインポート
 from arc.arc import EntryInfo, EntryType
 from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
@@ -127,8 +124,7 @@ def set_archive_path(path: str) -> bool:
             log_print(INFO, f"ファイルサイズ: {os.path.getsize(path):,} バイト")
         
         # マネージャーにカレントパスを設定
-        if isinstance(manager, EnhancedArchiveManager):
-            manager.set_current_path(path)
+        manager.set_current_path(path)
         all_entries = manager.get_entry_cache()
         log_print(INFO, f"エントリ数: {len(all_entries.keys())}/{len(all_entries.values())}")
         # マネージャーがこのファイルを処理できるか確認
@@ -230,10 +226,8 @@ def recursive_list_archive_contents(internal_path: str = "") -> bool:
             log_print(INFO, f"アーカイブ内にエントリが見つかりませんでした") 
             return False
 
-        # 辞書の値（EntryInfoのリスト）を連結してすべてのエントリを取得
-        all_entries = []
-        for entries_list in all_entries_dict.values():
-            all_entries.extend(entries_list)
+        # 辞書の値（EntryInfo）をリストに収集
+        all_entries = list(all_entries_dict.values())
         if not all_entries:
             log_print(INFO, f"アーカイブ内にエントリが見つかりませんでした")
             return False
@@ -558,11 +552,6 @@ def show_handlers_info() -> bool:
         成功した場合はTrue、失敗した場合はFalse
     """
     try:
-        # EnhancedArchiveManagerインスタンスからハンドラー情報を取得
-        if not isinstance(manager, EnhancedArchiveManager):
-            log_print(ERROR, "エラー: マネージャーからハンドラー情報を取得できません")
-            return False
-        
         log_print(INFO, "\nハンドラー情報:")
         handlers = manager.handlers
         
@@ -633,12 +622,11 @@ def show_cached_entries() -> bool:
             log_print(INFO, f"キャッシュにエントリが見つかりませんでした。")
             return False
         
-        # すべてのキャッシュエントリを集める
+        # キャッシュを持つエントリを集める
         cached_entries = []
-        for path, entries in all_entries_dict.items():
-            for entry in entries:
-                if hasattr(entry, 'cache') and entry.cache is not None:
-                    cached_entries.append(entry)
+        for path, entry in all_entries_dict.items():
+            if hasattr(entry, 'cache') and entry.cache is not None:
+                cached_entries.append(entry)
         
         if not cached_entries:
             log_print(INFO, "キャッシュを持つエントリはありません。")
@@ -715,7 +703,7 @@ def show_cached_entry_paths(manager):
 def show_cached_recursive(manager, path="", prefix=""):
     """
     キャッシュを使って再帰的にファイルツリーを表示する
-    新しいキャッシュ形式（dict[str, EntryInfo]）に対応
+    キャッシュ形式（dict[str, EntryInfo]）に対応
     """
     if not hasattr(manager, 'get_entry_cache'):
         log_print(INFO, "このマネージャーはキャッシュ機能を持っていません")

@@ -18,6 +18,7 @@ from .components.path_resolver import PathResolver
 from .components.archive_processor import ArchiveProcessor
 from .components.entry_finalizer import EntryFinalizer
 from .components.root_entry_manager import RootEntryManager
+from .components.temp_file_manager import TempFileManager
 
 class EnhancedArchiveManager(ArchiveManager):
     """
@@ -37,6 +38,7 @@ class EnhancedArchiveManager(ArchiveManager):
         super().__init__()
         
         # 分割した機能コンポーネントを初期化
+        self._temp_file_manager = TempFileManager(self)  # 一時ファイル管理を先に初期化
         self._entry_cache = EntryCacheManager(self)
         self._path_resolver = PathResolver(self)
         self._archive_processor = ArchiveProcessor(self)
@@ -152,7 +154,7 @@ class EnhancedArchiveManager(ArchiveManager):
         現在のエントリキャッシュを取得する
         
         Returns:
-            パスをキーとし、対応するエントリのリストを値とする辞書
+            パスをキーとし、対応するエントリを値とする辞書
         """
         return self._entry_cache.get_entry_cache()
 
@@ -177,7 +179,7 @@ class EnhancedArchiveManager(ArchiveManager):
             return entries
         except Exception as e:
             self.debug_error(f"全エントリリスト取得中にエラーが発生しました: {e}", trace=True)
-
+    
     def list_all_entries(self, path: str, recursive: bool = True) -> List[EntryInfo]:
         """
         指定されたパスの配下にあるすべてのエントリを再帰的に取得する
