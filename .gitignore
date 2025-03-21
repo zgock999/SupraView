@@ -172,3 +172,5 @@ cython_debug/
 
 # SR models
 models/
+gfpgan/
+torch_models/
