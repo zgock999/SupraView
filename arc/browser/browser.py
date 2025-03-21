@@ -57,9 +57,6 @@ class ArchiveBrowser:
         
         # エントリキャッシュから条件に合うファイルエントリを抽出（アーカイブは対象外）
         for path, entry in entry_cache.items():
-            # 空文字列エントリは明示的に除外
-            if path == "":
-                continue
             # ファイルエントリの場合のみ処理
             if entry.type == EntryType.FILE:
                 # 拡張子条件を満たすものだけを抽出

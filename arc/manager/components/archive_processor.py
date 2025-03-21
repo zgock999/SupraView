@@ -362,6 +362,12 @@ class ArchiveProcessor:
             root_manager = RootEntryManager(self._manager)
             root_entry = root_manager.ensure_root_entry(path)
             
+            # バグ修正: ルートエントリがファイルでアーカイブ拡張子を持つ場合、タイプをARCHIVEに修正
+            if root_entry and root_entry.type == EntryType.FILE and os.path.isfile(path):
+                if self._manager._is_archive_by_extension(root_entry.name):
+                    self._manager.debug_info(f"ルートエントリのタイプをARCHIVEに修正: {root_entry.path}")
+                    root_entry.type = EntryType.ARCHIVE
+            
             # ハンドラを取得
             handler = self._manager.get_handler(path)
             if not handler:
@@ -386,6 +392,9 @@ class ArchiveProcessor:
             # 結果リスト（ルートエントリを先頭に）
             all_entries = [root_entry] if root_entry else []
             all_entries.extend(base_entries)
+            
+            # バグ修正: 結果リスト全体（ルートエントリを含む）に対してアーカイブ識別を実行
+            all_entries = self._mark_archive_entries(all_entries)
             
             # 再帰処理の場合はアーカイブも処理
             if recursive:
