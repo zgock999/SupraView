@@ -8,7 +8,7 @@ import os
 import datetime
 from typing import Optional
 
-from ...arc import EntryInfo, EntryType
+from ...arc import EntryInfo, EntryType, EntryStatus
 
 class RootEntryManager:
     """
@@ -76,6 +76,9 @@ class RootEntryManager:
                 # その他の特殊ケース
                 folder_name = path.rstrip('/\\') or "Root"
         
+        # 存在確認してステータスを設定
+        status = EntryStatus.READY if os.path.exists(path) else EntryStatus.BROKEN
+        
         return EntryInfo(
             name=folder_name,
             path=path,
@@ -83,7 +86,8 @@ class RootEntryManager:
             type=EntryType.DIRECTORY,
             size=0,
             modified_time=None,
-            abs_path=path
+            abs_path=path,
+            status=status
         )
     
     def _create_file_entry(self, path: str) -> EntryInfo:
@@ -114,11 +118,12 @@ class RootEntryManager:
                 type=file_type,
                 size=size,
                 modified_time=modified_time,
-                abs_path=path
+                abs_path=path,
+                status=EntryStatus.READY  # ファイルが存在するのでREADY
             )
-        except Exception as e:
-            self._manager.debug_error(f"ファイル情報取得エラー: {path} - {e}", trace=True)
-            # エラーが発生した場合も最低限の情報で作成
+        except (IOError, PermissionError) as e:
+            # ファイルアクセス関連のエラーの場合はBROKENとしてマーク（トレースなし）
+            self._manager.debug_error(f"ファイル情報取得エラー: {path} - {e}")
             return EntryInfo(
                 name=os.path.basename(path),
                 path=path,
@@ -126,8 +131,13 @@ class RootEntryManager:
                 type=EntryType.FILE,
                 size=0,
                 modified_time=None,
-                abs_path=path
+                abs_path=path,
+                status=EntryStatus.BROKEN  # エラーが発生したのでBROKEN
             )
+        except Exception as e:
+            # その他の予期せぬエラーの場合はトレース付きでエラーを記録し、再スロー
+            self._manager.debug_error(f"ファイル情報取得中に予期せぬエラー: {path} - {e}", trace=True)
+            raise
     
     def ensure_root_entry(self, path: str) -> Optional[EntryInfo]:
         """
@@ -205,7 +215,8 @@ class RootEntryManager:
                         type=EntryType.DIRECTORY,
                         size=0,
                         modified_time=None,
-                        abs_path=item_path
+                        abs_path=item_path,
+                        status=EntryStatus.READY  # 初期状態はREADY
                     )
                     folder_contents.append(entry)
                     
@@ -231,19 +242,43 @@ class RootEntryManager:
                             type=file_type,
                             size=size,
                             modified_time=modified_time,
-                            abs_path=item_path
+                            abs_path=item_path,
+                            status=EntryStatus.READY  # 初期状態はREADY
                         )
                         folder_contents.append(entry)
                         
                         # エントリをキャッシュに追加
                         self._manager._entry_cache.add_entry_to_cache(entry)
+                    except (IOError, PermissionError) as e:
+                        # ファイルアクセス関連のエラーの場合はBROKENとしてマーク
+                        self._manager.debug_error(f"ファイル情報取得エラー: {item_path} - {e}")
+                        entry = EntryInfo(
+                            name=item,
+                            path=item_path,
+                            rel_path=rel_path,
+                            type=EntryType.FILE,
+                            size=0,
+                            modified_time=None,
+                            abs_path=item_path,
+                            status=EntryStatus.BROKEN  # エラー発生時はBROKEN
+                        )
+                        folder_contents.append(entry)
+                        self._manager._entry_cache.add_entry_to_cache(entry)
                     except Exception as e:
-                        self._manager.debug_error(f"ファイル情報取得エラー: {item_path} - {e}", trace=True)
+                        # その他の予期せぬエラーの場合はトレース付きで記録し、スキップ
+                        self._manager.debug_error(f"ファイル情報取得中に予期せぬエラー: {item_path} - {e}", trace=True)
+                        continue
             
             self._manager.debug_info(f"フォルダ内容を処理: {path} ({len(folder_contents)} アイテム)")
             
+        except (IOError, PermissionError) as e:
+            self._manager.debug_error(f"フォルダ内容の取得エラー: {path} - {e}")
+            # フォルダ内容の取得に失敗した場合はルートエントリをBROKENとしてマーク
+            root_info.status = EntryStatus.BROKEN
         except Exception as e:
-            self._manager.debug_error(f"フォルダ内容の取得エラー: {path} - {e}", trace=True)
+            # その他の予期せぬエラーの場合はトレース付きで記録し、再スロー
+            self._manager.debug_error(f"フォルダ内容の取得中に予期せぬエラー: {path} - {e}", trace=True)
+            raise
         
         return root_info
     
@@ -269,19 +304,26 @@ class RootEntryManager:
                 handler = self._manager.get_handler(path)
                 if handler:
                     # ハンドラから直接エントリリストを取得
-                    direct_children = handler.list_all_entries(path)
-                    if direct_children:
-                        self._manager.debug_info(f"アーカイブから {len(direct_children)} エントリを取得")
-                        
-                        # エントリをファイナライズしてアーカイブを識別
-                        for entry in direct_children:
-                            finalized_entry = self._manager.finalize_entry(entry, path)
+                    try:
+                        direct_children = handler.list_all_entries(path)
+                        if direct_children:
+                            self._manager.debug_info(f"アーカイブから {len(direct_children)} エントリを取得")
                             
-                            # エントリをキャッシュに追加
-                            self._manager._entry_cache.add_entry_to_cache(finalized_entry)
-                    else:
-                        self._manager.debug_info(f"アーカイブは空です: {path}")
+                            # エントリをファイナライズしてアーカイブを識別
+                            for entry in direct_children:
+                                finalized_entry = self._manager.finalize_entry(entry, path)
+                                
+                                # エントリをキャッシュに追加
+                                self._manager._entry_cache.add_entry_to_cache(finalized_entry)
+                        else:
+                            self._manager.debug_info(f"アーカイブは空です: {path}")
+                    except (IOError, PermissionError) as e:
+                        # アーカイブ内のエントリ取得に失敗した場合はルートエントリをBROKENとしてマーク
+                        self._manager.debug_error(f"アーカイブ内容の取得に失敗: {path} - {e}")
+                        root_info.status = EntryStatus.BROKEN
             except Exception as e:
                 self._manager.debug_error(f"アーカイブのエントリ取得中にエラー: {e}", trace=True)
+                # エラーが発生した場合はルートエントリをBROKENとしてマーク
+                root_info.status = EntryStatus.BROKEN
         
         return root_info

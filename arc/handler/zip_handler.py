@@ -442,6 +442,7 @@ class ZipHandler(ArchiveHandler):
         Raises:
             FileNotFoundError: 指定されたアーカイブやファイルが存在しない場合
             IOError: アーカイブが壊れているなど読み込みに失敗した場合
+            PermissionError: ファイルへのアクセス権限がない場合
         """
         # アーカイブパスがZIPファイルであることを確認
         if not os.path.isfile(archive_path):
@@ -470,14 +471,18 @@ class ZipHandler(ArchiveHandler):
         except zipfile.BadZipFile as e:
             # ZIP書庫が壊れている場合、詳細なメッセージをつけてIOErrorをスロー
             error_msg = f"ZIPファイルが破損しています: {archive_path} - {str(e)}"
-            self.debug_error(error_msg, trace=True)
+            self.debug_error(error_msg)
             raise IOError(error_msg)
+        except PermissionError as e:
+            # アクセス権限エラーの場合はそのまま再スロー
+            self.debug_error(f"ZIPファイルへのアクセス権限がありません: {archive_path} - {str(e)}")
+            raise
         except FileNotFoundError:
             # 既に適切なFileNotFoundErrorが発生している場合はそのまま再スロー
             raise
         except Exception as e:
             # その他の例外はIOErrorとして再スロー
-            self.debug_error(f"ZIPアーカイブ内のファイル読み込みエラー: {archive_path} - {str(e)}", trace=True)
+            self.debug_error(f"ZIPアーカイブ内のファイル読み込みエラー: {archive_path} - {str(e)}")
             raise IOError(f"ZIPアーカイブ読み込みエラー: {archive_path} - {str(e)}")
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
@@ -621,14 +626,14 @@ class ZipHandler(ArchiveHandler):
         except zipfile.BadZipFile as e:
             # ZIP書庫が壊れている場合、詳細なメッセージをつけてIOErrorをスロー
             error_msg = f"メモリ上のZIPデータが破損しています - {str(e)}"
-            self.debug_error(error_msg, trace=True)
+            self.debug_error(error_msg)
             raise IOError(error_msg)
         except FileNotFoundError:
             # 既に適切なFileNotFoundErrorが発生している場合はそのまま再スロー
             raise
         except Exception as e:
             # その他の例外はIOErrorとして再スロー
-            self.debug_error(f"ZipHandler.read_file_from_bytes エラー: {str(e)}", trace=True)
+            self.debug_error(f"ZipHandler.read_file_from_bytes エラー: {str(e)}")
             raise IOError(f"メモリ上のZIPデータ読み込みエラー: {str(e)}")
 
     def _is_archive_by_extension(self, filename: str) -> bool:
@@ -934,8 +939,10 @@ class ZipHandler(ArchiveHandler):
         
         # ファイルが存在しない場合は、FileNotFoundErrorをスローする
         if not zip_path:
+            self.debug_error(f"ZIPファイルが見つかりません: {path}")
             raise FileNotFoundError(f"ZIPファイルが見つかりません: {path}")
         elif not os.path.isfile(zip_path):
+            self.debug_error(f"ZIPファイルが存在しません: {zip_path}")
             raise FileNotFoundError(f"ZIPファイルが存在しません: {zip_path}")
         
         # 内部パスが指定されている場合は警告（このメソッドではアーカイブ全体を対象とする）
@@ -951,11 +958,16 @@ class ZipHandler(ArchiveHandler):
         except zipfile.BadZipFile as e:
             # ZIP書庫が壊れている場合、詳細なメッセージをつけてIOErrorをスロー
             error_msg = f"ZIPファイルが破損しています: {zip_path} - {str(e)}"
-            self.debug_error(error_msg, trace=True)
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
+        except PermissionError as e:
+            # ファイルへのアクセス権限がない場合
+            error_msg = f"ZIPファイルへのアクセス権限がありません: {zip_path} - {str(e)}"
+            self.debug_error(error_msg)
             raise IOError(error_msg)
         except Exception as e:
             # その他の例外はIOErrorとして再スロー
-            self.debug_error(f"ZipHandler: 全エントリ取得中にエラーが発生しました: {e}", trace=True)
+            self.debug_error(f"ZipHandler: 全エントリ取得中にエラーが発生しました: {e}")
             raise IOError(f"ZIPファイル読み込みエラー: {zip_path} - {str(e)}")
 
     def list_all_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
@@ -992,16 +1004,16 @@ class ZipHandler(ArchiveHandler):
             except zipfile.BadZipFile as e:
                 # ZIP書庫が壊れている場合、詳細なメッセージをつけてIOErrorをスロー
                 error_msg = f"メモリ上のZIPデータが破損しています - {str(e)}"
-                self.debug_error(error_msg, trace=True)
+                self.debug_error(error_msg)
                 raise IOError(error_msg)
             except Exception as e:
                 # その他の例外はIOErrorとして再スロー
-                self.debug_error(f"ZipHandler: ZIPファイルオープンエラー: {e}", trace=True)
+                self.debug_error(f"ZipHandler: ZIPファイルオープンエラー: {e}")
                 raise IOError(f"メモリ上のZIPデータ処理エラー: {str(e)}")
         except IOError:
             # IOError例外はそのまま再スロー
             raise
         except Exception as e:
             # その他の例外はIOErrorとして再スロー
-            self.debug_error(f"ZipHandler: メモリからの全エントリ取得エラー: {e}", trace=True)
+            self.debug_error(f"ZipHandler: メモリからの全エントリ取得エラー: {e}")
             raise IOError(f"メモリ上のZIPデータ処理エラー: {str(e)}")

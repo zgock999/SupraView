@@ -31,6 +31,13 @@ class EntryType(Enum):
         return self == EntryType.FILE or self == EntryType.ARCHIVE
 
 
+class EntryStatus(Enum):
+    """エントリのステータスを表す列挙型"""
+    READY = auto()     # エントリは使用可能
+    BROKEN = auto()    # 物理エラーもしくは論理エラーで使用不可
+    SCANNING = auto()  # 書庫もしくはディレクトリのエントリを非同期で構築中なのでまだ使用不可
+
+
 class EntryInfo:
     """
     アーカイブ内のファイル/ディレクトリの情報を表すクラス
@@ -49,7 +56,8 @@ class EntryInfo:
                  is_hidden: bool = False,
                  name_in_arc: Optional[str] = None,  # デフォルト値を None に変更
                  attrs: Optional[Dict[str, Any]] = None,
-                 abs_path: str = ""
+                 abs_path: str = "",
+                 status: EntryStatus = EntryStatus.READY
                  ):
         """
         エントリ情報を初期化する
@@ -66,6 +74,7 @@ class EntryInfo:
             name_in_arc: アーカイブ内での名前（Noneの場合はnameが使用される）
             attrs: その他の属性（辞書型）
             abs_path: 絶対パス（指定がなければpathが使用される）
+            status: エントリの状態（READY, BROKEN, SCANNING）
         """
         self.name = name
         self.path = path
@@ -79,6 +88,7 @@ class EntryInfo:
         self.name_in_arc = name if name_in_arc is None else name_in_arc  # None の場合のみ name を使用
         self.attrs = attrs or {}
         self.abs_path = abs_path if abs_path else path
+        self.status = status
 
 # ArchiveManager クラスの宣言 (循環インポートを避けるため)
 class ArchiveManager:

@@ -24,7 +24,7 @@ if (project_root not in sys.path):
 from logutils import setup_logging, log_print, log_trace, DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 from arc.interface import get_archive_manager  # interfaceモジュールからインポート
-from arc.arc import EntryInfo, EntryType
+from arc.arc import EntryInfo, EntryType, EntryStatus
 from arc.path_utils import normalize_path, try_decode_path, fix_garbled_filename
 
 try:
@@ -170,8 +170,6 @@ def list_archive_contents(internal_path: str = "") -> bool:
                 entries = manager.list_entries(internal_path)
             except FileNotFoundError as e:
                 log_print(ERROR, f"エラー: 指定されたパスが見つかりません: {internal_path}")
-                if debug_mode:
-                    traceback.print_exc()
                 return False
         else:
             # ルートの場合は空のパスを使用
@@ -184,16 +182,26 @@ def list_archive_contents(internal_path: str = "") -> bool:
         
         # エントリを表示
         print("\nアーカイブの内容:")
-        print("{:<40} {:>10} {:>20} {}".format("名前", "サイズ", "更新日時", "種類"))
-        print("-" * 80)
+        print("{:<36} {:>10} {:>17} {:<8} {}".format("名前", "サイズ", "更新日時", "ステータス", "種類"))
+        print("-" * 90)
         
         for entry in sorted(entries, key=lambda e: (e.type.value, e.name)):
             type_str = "DIR" if entry.type == EntryType.DIRECTORY else "ARC" if entry.type == EntryType.ARCHIVE else "FILE"
             size_str = "-" if entry.type == EntryType.DIRECTORY else f"{entry.size:,}"
-            date_str = "-" if entry.modified_time is None else entry.modified_time.strftime("%Y-%m-%d %H:%M:%S")
+            date_str = "-" if entry.modified_time is None else entry.modified_time.strftime("%Y-%m-%d %H:%M")
             
-            print("{:<40} {:>10} {:>20} {}".format(
-                entry.name[:39], size_str, date_str, type_str
+            # ステータスの表示を追加
+            status_str = "不明"
+            if hasattr(entry, 'status'):
+                if entry.status == EntryStatus.READY:
+                    status_str = "READY"
+                elif entry.status == EntryStatus.BROKEN:
+                    status_str = "BROKEN"
+                elif entry.status == EntryStatus.SCANNING:
+                    status_str = "SCANNING"
+            
+            print("{:<36} {:>10} {:>17} {:<8} {}".format(
+                entry.name[:35], size_str, date_str, status_str, type_str
             ))
             
         print(f"\n合計: {len(entries)} エントリ")

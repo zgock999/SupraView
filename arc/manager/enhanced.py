@@ -9,7 +9,7 @@ import os
 from typing import List, Optional, Dict, Set, Any
 
 from .manager import ArchiveManager
-from ..arc import EntryInfo, EntryType
+from ..arc import EntryInfo, EntryType, EntryStatus
 from ..handler.handler import ArchiveHandler
 
 # 分割した機能をインポート
@@ -205,6 +205,7 @@ class EnhancedArchiveManager(ArchiveManager):
             
         Raises:
             FileNotFoundError: 指定されたパスが存在しない場合
+            IOError: ファイルの読み込みに失敗した場合
         """
         # パスの正規化（先頭のスラッシュを削除）
         if path.startswith('/'):
@@ -222,19 +223,27 @@ class EnhancedArchiveManager(ArchiveManager):
             self.debug_info(f"アーカイブ内のファイルを読み込み: {archive_path} -> {internal_path}")
             handler = self.get_handler(archive_path)
             if (handler):
-                # キャッシュされたバイトデータがある場合は、read_file_from_bytesを使用
-                if cached_bytes is not None:
-                    self.debug_info(f"キャッシュされた書庫データから内部ファイルを抽出: {internal_path}")
-                    content = handler.read_file_from_bytes(cached_bytes, internal_path)
-                    if content is None:
-                        raise FileNotFoundError(f"指定されたファイルはアーカイブ内に存在しません: {path}")
-                    return content
-                else:
-                    # 通常のファイル読み込み
-                    content = handler.read_archive_file(archive_path, internal_path)
-                    if content is None:
-                        raise FileNotFoundError(f"指定されたファイルはアーカイブ内に存在しません: {path}")
-                    return content
+                try:
+                    # キャッシュされたバイトデータがある場合は、read_file_from_bytesを使用
+                    if cached_bytes is not None:
+                        self.debug_info(f"キャッシュされた書庫データから内部ファイルを抽出: {internal_path}")
+                        content = handler.read_file_from_bytes(cached_bytes, internal_path)
+                        if content is None:
+                            raise FileNotFoundError(f"指定されたファイルはアーカイブ内に存在しません: {path}")
+                        return content
+                    else:
+                        # 通常のファイル読み込み
+                        content = handler.read_archive_file(archive_path, internal_path)
+                        if content is None:
+                            raise FileNotFoundError(f"指定されたファイルはアーカイブ内に存在しません: {path}")
+                        return content
+                except (IOError, PermissionError) as e:
+                    # IO/Permissionエラー発生時にエントリステータスをBROKENに設定
+                    self.debug_error(f"ファイル読み込みエラー: {path} - {str(e)}")
+                    self._entry_cache.set_entry_status(path, EntryStatus.BROKEN)
+                    
+                    # 例外を再スロー
+                    raise IOError(f"ファイル読み込みエラー: {path} - {str(e)}")
         
         # キャッシュされたバイトデータがある場合は、そのまま返す
         if cached_bytes is not None:
@@ -243,3 +252,19 @@ class EnhancedArchiveManager(ArchiveManager):
         
         # 該当するファイルが見つからない場合はエラー
         raise FileNotFoundError(f"指定されたファイルは存在しません: {path}")
+
+    def update_entry_status(self, path: str, status: EntryStatus) -> bool:
+        """
+        指定されたパスのエントリのステータスを更新する
+        
+        アプリケーション層から、例えば画像ファイルが壊れているなどの理由で
+        エントリのステータスを変更したい場合に使用します。
+        
+        Args:
+            path: ステータスを更新するエントリのパス
+            status: 設定する新しいステータス
+            
+        Returns:
+            更新に成功した場合はTrue、エントリが見つからない場合はFalse
+        """
+        return self._entry_cache.set_entry_status(path, status)

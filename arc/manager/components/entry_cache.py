@@ -7,7 +7,7 @@
 import os
 from typing import Dict, List, Optional, Set
 
-from ...arc import EntryInfo, EntryType
+from ...arc import EntryInfo, EntryType, EntryStatus
 
 class EntryCacheManager:
     """
@@ -37,7 +37,7 @@ class EntryCacheManager:
         Returns:
             エントリ情報。存在しない場合はNone
         """
-        # パスの正規化（先頭のスラッシュを削除）
+        # パスの正規化（先頭のスラッシュを削除）        
         if path.startswith('/'):
             path = path[1:]
             self._manager.debug_info(f"先頭のスラッシュを削除しました: {path}")
@@ -205,3 +205,26 @@ class EntryCacheManager:
             raise FileNotFoundError(f"指定されたパス '{path}' にエントリが見つかりません")
         
         return result
+
+    def set_entry_status(self, path: str, status: EntryStatus) -> bool:
+        """
+        指定されたパスのエントリのステータスを設定する
+        
+        Args:
+            path: ステータスを設定するエントリのパス
+            status: 設定する新しいステータス
+            
+        Returns:
+            更新に成功した場合はTrue、エントリが見つからない場合はFalse
+        """
+        # キャッシュからエントリを取得
+        entry = self.get_entry_info(path)
+        if entry is None:
+            self._manager.debug_warning(f"ステータス更新: エントリが見つかりません: {path}")
+            return False
+            
+        # ステータスを更新
+        old_status = entry.status
+        entry.status = status
+        self._manager.debug_info(f"エントリステータスを更新: {path}, {old_status} -> {status}")
+        return True

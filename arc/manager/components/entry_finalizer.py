@@ -6,7 +6,7 @@
 
 from typing import List
 
-from ...arc import EntryInfo, EntryType
+from ...arc import EntryInfo, EntryType, EntryStatus
 
 class EntryFinalizer:
     """
@@ -42,6 +42,10 @@ class EntryFinalizer:
         # ファイルの場合、アーカイブかどうかを判定
         if entry.type == EntryType.FILE and self._manager._is_archive_by_extension(entry.name):
             entry.type = EntryType.ARCHIVE
+        
+        # この時点ではエントリのステータスをREADYに設定
+        # 実際にファイルにアクセスするまで正確なステータスは不明
+        entry.status = EntryStatus.READY
         
         return entry
 

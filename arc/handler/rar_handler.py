@@ -172,7 +172,7 @@ class RarHandler(ArchiveHandler):
                 return result
         except Exception as e:
             if self.debug:
-                self.debug_error(f"エントリ一覧取得エラー: {e}", trace=True)
+                self.debug_error(f"エントリ一覧取得エラー: {e}")
             return []
 
     def _get_entries_from_rarfile(self, rf: 'rarfile.RarFile', internal_path: str = "") -> List[EntryInfo]:
@@ -399,9 +399,23 @@ class RarHandler(ArchiveHandler):
             
         Returns:
             ファイルの内容。読み込みに失敗した場合はNone
+        
+        Raises:
+            FileNotFoundError: アーカイブが存在しない、またはファイルが見つからない場合
+            IOError: RARファイルが破損している、CRCエラーなど読み込みに失敗した場合
+            PermissionError: ファイルへのアクセス権限がない場合
         """
         if not RARFILE_AVAILABLE or not self._available:
-            return None
+            raise IOError(f"RARファイルをサポートするライブラリがインストールされていません")
+        
+        # アーカイブファイルが存在するか確認
+        if not os.path.isfile(archive_path):
+            raise FileNotFoundError(f"指定されたアーカイブが存在しません: {archive_path}")
+        
+        # 拡張子をチェック
+        _, ext = os.path.splitext(archive_path.lower())
+        if ext not in self._supported_formats:
+            raise ValueError(f"指定されたファイルはRARアーカイブではありません: {archive_path}")
         
         self.debug_info(f"アーカイブ内ファイル読み込み: {archive_path} -> {file_path}")
         
@@ -429,7 +443,7 @@ class RarHandler(ArchiveHandler):
                 info = rf.getinfo(normal_path)
             except KeyError:
                 self.debug_error(f"ファイルが見つかりません: {normal_path}")
-                return None
+                raise FileNotFoundError(f"RARファイル内のファイルが見つかりません: {normal_path}")
                 
             # ディレクトリの場合は読み込みをスキップ
             if info.isdir():
@@ -443,24 +457,38 @@ class RarHandler(ArchiveHandler):
             return content
             
         except rarfile.BadRarFile as e:
-            self.debug_error(f"不正なRARファイル: {e}")
-            return None
+            # RAR書庫が壊れている場合
+            error_msg = f"不正なRARファイル: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
         except rarfile.RarCRCError as e:
-            self.debug_error(f"CRCエラー: {e}")
-            return None
+            # CRCエラーの場合
+            error_msg = f"RARファイルのCRCエラー: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
         except rarfile.PasswordRequired as e:
-            self.debug_error(f"パスワードが必要: {e}")
-            return None
+            # パスワードが必要な場合
+            error_msg = f"パスワードで保護されたRARファイル: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
         except rarfile.NeedFirstVolume as e:
-            self.debug_error(f"最初のボリュームが必要: {e}")
-            return None
+            # 分割アーカイブの最初のボリュームが必要な場合
+            error_msg = f"RARの分割アーカイブの最初のボリュームが必要です: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
+        except PermissionError as e:
+            # アクセス権限エラーの場合はそのまま再スロー
+            self.debug_error(f"RARファイルへのアクセス権限がありません: {archive_path} - {str(e)}")
+            raise
         except io.UnsupportedOperation as e:
             # ディレクトリの読み込み試行時に発生
-            self.debug_error(f"サポートされていない操作: {e}")
-            return None
+            error_msg = f"サポートされていない操作: {archive_path}/{file_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
         except Exception as e:
-            self.debug_error(f"ファイル読み込み中にエラー: {e}", trace=True)
-            return None
+            # その他の例外
+            self.debug_error(f"ファイル読み込み中にエラー: {e}")
+            raise IOError(f"RARファイル読み込みエラー: {archive_path} - {str(e)}")
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
         """
@@ -586,15 +614,22 @@ class RarHandler(ArchiveHandler):
             
         Returns:
             アーカイブ内のすべてのエントリのリスト
+        
+        Raises:
+            FileNotFoundError: 指定されたパスに書庫が存在しない場合
+            IOError: 書庫が壊れているなど読み込みに失敗した場合
         """
         # パスがRARファイル自体かRAR内のパスかを判定
         archive_path, internal_path = self._split_path(path)
         
-        if not archive_path or not os.path.isfile(archive_path):
-            self.debug_warning(f"有効なRARファイルが見つかりません: {path}")
-            return []
+        if not archive_path:
+            self.debug_error(f"有効なRARファイルが見つかりません: {path}")
+            raise FileNotFoundError(f"RARファイルが見つかりません: {path}")
+        elif not os.path.isfile(archive_path):
+            self.debug_error(f"RARファイルが存在しません: {archive_path}")
+            raise FileNotFoundError(f"RARファイルが存在しません: {archive_path}")
         
-        # 内部パスが指定されている場合はエラー（このメソッドではアーカイブ全体を対象とする）
+        # 内部パスが指定されている場合は警告（このメソッドではアーカイブ全体を対象とする）
         if internal_path:
             self.debug_warning(f"list_all_entriesでは内部パスを指定できません。アーカイブ全体が対象です: {path}")
             # 内部パスを無視してアーカイブファイル全体を処理
@@ -606,9 +641,30 @@ class RarHandler(ArchiveHandler):
                 all_entries = self._get_all_entries_from_rarfile(rf, archive_path)
                 self.debug_info(f"{archive_path} 内の全エントリ数: {len(all_entries)}")
                 return all_entries
+        except rarfile.BadRarFile as e:
+            # RAR書庫が壊れている場合
+            error_msg = f"RARファイルが破損しています: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
+        except rarfile.RarCRCError as e:
+            # CRCエラーの場合
+            error_msg = f"RARファイルのCRCエラー: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
+        except rarfile.NeedFirstVolume as e:
+            # 分割アーカイブの最初のボリュームが必要な場合
+            error_msg = f"RARの分割アーカイブの最初のボリュームが必要です: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
+        except PermissionError as e:
+            # アクセス権限がない場合
+            error_msg = f"RARファイルへのアクセス権限がありません: {archive_path} - {str(e)}"
+            self.debug_error(error_msg)
+            raise IOError(error_msg)
         except Exception as e:
-            self.debug_error(f"全エントリ取得中にエラーが発生しました: {e}", trace=True)
-            return []
+            # その他の例外はIOErrorとして再スロー
+            self.debug_error(f"全エントリ取得中にエラーが発生しました: {e}")
+            raise IOError(f"RARファイル読み込みエラー: {archive_path} - {str(e)}")
 
     def _get_all_entries_from_rarfile(self, rf: 'rarfile.RarFile', archive_path: 'str') -> List[EntryInfo]:
         """
@@ -716,10 +772,18 @@ class RarHandler(ArchiveHandler):
             
         Returns:
             ファイルの内容。読み込みに失敗した場合はNone
+        
+        Raises:
+            ValueError: データがRARフォーマットでない場合
+            FileNotFoundError: 指定されたファイルが存在しない場合
+            IOError: 書庫が壊れているなど読み込みに失敗した場合
         """
         if not RARFILE_AVAILABLE or not self._available:
-            return None
+            raise IOError(f"RARファイルをサポートするライブラリがインストールされていません")
             
+        if not self.can_handle_bytes(archive_data):
+            raise ValueError(f"データはRAR形式ではありません")
+        
         self.debug_info(f"メモリ上のRARデータから '{file_path}' を読み込み中")
         
         # 一時ファイルを使用して確実に処理
@@ -744,16 +808,28 @@ class RarHandler(ArchiveHandler):
                     return content
                 except KeyError:
                     self.debug_error(f"ファイルが見つかりません: {normal_path}")
-                    return None
+                    raise FileNotFoundError(f"RARファイル内のファイルが見つかりません: {normal_path}")
+                except rarfile.BadRarFile as e:
+                    error_msg = f"不正なRARデータ: {str(e)}"
+                    self.debug_error(error_msg)
+                    raise IOError(error_msg)
+                except rarfile.RarCRCError as e:
+                    error_msg = f"RARデータのCRCエラー: {str(e)}"
+                    self.debug_error(error_msg)
+                    raise IOError(error_msg)
+                except rarfile.PasswordRequired as e:
+                    error_msg = f"パスワードで保護されたRARデータ: {str(e)}"
+                    self.debug_error(error_msg)
+                    raise IOError(error_msg)
                 except Exception as e:
                     self.debug_error(f"ファイル読み込み中にエラー: {e}", trace=True)
-                    return None
+                    raise IOError(f"RARデータ読み込みエラー: {str(e)}")
             except Exception as e:
                 self.debug_error(f"RARファイルをオープンできません: {e}", trace=True)
-                return None
+                raise IOError(f"RARデータオープンエラー: {str(e)}")
         except Exception as e:
-            self.debug_error(f"メモリデータからの読み込みエラー: {e}", trace=True)
-            return None
+            self.debug_error(f"メモリデータからの読み込みエラー: {e}")
+            raise IOError(f"メモリ上のRARデータ処理エラー: {str(e)}")
         finally:
             # 一時ファイルを削除
             if temp_file and os.path.exists(temp_file):

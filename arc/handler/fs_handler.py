@@ -161,7 +161,7 @@ class FileSystemHandler(ArchiveHandler):
             return entries
             
         except (OSError, PermissionError) as e:
-            self.debug_error(f"ディレクトリの読み取りエラー: {abs_path}, {e}", trace=True)
+            self.debug_error(f"ディレクトリの読み取りエラー: {abs_path}, {e}")
             return []
     
     def _fuzzy_match_entries(self, path: str) -> List[EntryInfo]:
@@ -257,7 +257,7 @@ class FileSystemHandler(ArchiveHandler):
                             results.append(entry)
             
         except Exception as e:
-            self.debug_error(f"部分一致検索エラー: {e}", trace=True)
+            self.debug_error(f"部分一致検索エラー: {e}")
             
         return results
     
@@ -320,7 +320,7 @@ class FileSystemHandler(ArchiveHandler):
             )
             
         except (OSError, PermissionError) as e:
-            self.debug_error(f"エントリ情報取得エラー: {abs_path}, {e}", trace=True)
+            self.debug_error(f"エントリ情報取得エラー: {abs_path}, {e}")
             return None
     
     def read_archive_file(self, archive_path: str, file_path: str) -> Optional[bytes]:
@@ -333,38 +333,55 @@ class FileSystemHandler(ArchiveHandler):
             
         Returns:
             ファイルの内容。読み込みに失敗した場合はNone
+            
+        Raises:
+            FileNotFoundError: 指定されたファイルが存在しない場合
+            PermissionError: ファイルへのアクセス権限がない場合
+            IOError: その他のファイル読み込みエラーの場合
         """
+        # 両方のパスを正規化
+        norm_archive_path = self.normalize_path(archive_path)
+        norm_file_path = self.normalize_path(file_path) if file_path else ""
+        
+        if norm_file_path:
+            # サブパスが指定されている場合は結合
+            full_path = os.path.join(norm_archive_path, norm_file_path).replace('\\', '/')
+            self.debug_info(f"結合パスからファイル読み込み: {full_path}")
+        else:
+            # サブパスが空の場合はarchive_path自体を読み込む
+            full_path = norm_archive_path
+            self.debug_info(f"単一パスからファイル読み込み: {full_path}")
+        
+        # 絶対パスに変換
+        abs_path = self._to_absolute_path(full_path)
+        
+        # ファイルが存在し、通常のファイルであるか確認
+        if not os.path.exists(abs_path):
+            error_msg = f"ファイルが存在しません: {abs_path}"
+            self.debug_warning(error_msg)
+            raise FileNotFoundError(error_msg)
+        
+        if not os.path.isfile(abs_path):
+            error_msg = f"パス {abs_path} はファイルではありません"
+            self.debug_warning(error_msg)
+            raise IOError(error_msg)
+        
+        # ファイルを読み込む
         try:
-            # 両方のパスを正規化
-            norm_archive_path = self.normalize_path(archive_path)
-            norm_file_path = self.normalize_path(file_path) if file_path else ""
-            
-            if norm_file_path:
-                # サブパスが指定されている場合は結合
-                full_path = os.path.join(norm_archive_path, norm_file_path).replace('\\', '/')
-                self.debug_info(f"結合パスからファイル読み込み: {full_path}")
-            else:
-                # サブパスが空の場合はarchive_path自体を読み込む
-                full_path = norm_archive_path
-                self.debug_info(f"単一パスからファイル読み込み: {full_path}")
-            
-            # 絶対パスに変換
-            abs_path = self._to_absolute_path(full_path)
-            
-            # ファイルが存在し、通常のファイルであるか確認
-            if not os.path.isfile(abs_path):
-                self.debug_warning(f"パス {abs_path} はファイルではありません")
-                return None
-            
-            # ファイルを読み込む
             with open(abs_path, 'rb') as f:
-                content = f.read()
-                self.debug_info(f"{len(content):,} バイトを読み込みました")
-                return content
-                
-        except (OSError, PermissionError) as e:
-            self.debug_error(f"ファイル読み込みエラー: {e}", trace=True)
-            return None
+                return f.read()
+        except PermissionError as e:
+            # アクセス権限エラーの場合はそのまま再スロー
+            self.debug_error(f"ファイルへのアクセス権限がありません: {abs_path} - {str(e)}")
+            raise
+        except OSError as e:
+            # その他のOSエラーはIOErrorとして再スロー
+            self.debug_error(f"ファイル読み込みエラー: {e}")
+            raise IOError(f"ファイル読み込みエラー: {abs_path} - {str(e)}")
+        except Exception as e:
+            # その他の例外
+            self.debug_error(f"予期せぬエラー: {e}")
+            raise IOError(f"ファイル読み込みエラー: {abs_path} - {str(e)}")
     
     def get_stream(self, path: str) -> Optional[BinaryIO]:
         """
@@ -441,6 +458,10 @@ class FileSystemHandler(ArchiveHandler):
             
         Returns:
             ディレクトリ内のすべてのエントリのリスト
+            
+        Raises:
+            FileNotFoundError: 指定されたパスに存在しない場合
+            IOError: ディレクトリの読み込みに失敗した場合
         """
         # 空の場合やパスが指定されていない場合は、現在のパスをデフォルトとして使用
         if not path:
@@ -454,9 +475,13 @@ class FileSystemHandler(ArchiveHandler):
         self.debug_info(f"list_all_entries 開始 - パス: {abs_path}")
         
         # ディレクトリが存在するか確認
+        if not os.path.exists(abs_path):
+            self.debug_error(f"パスが存在しません: {abs_path}")
+            raise FileNotFoundError(f"パスが存在しません: {abs_path}")
+        
         if not os.path.isdir(abs_path):
-            self.debug_warning(f"ディレクトリが存在しません: {abs_path}")
-            return []
+            self.debug_error(f"パスはディレクトリではありません: {abs_path}")
+            raise NotADirectoryError(f"パスはディレクトリではありません: {abs_path}")
         
         # すべてのエントリを格納するリスト
         all_entries = []
@@ -582,11 +607,14 @@ class FileSystemHandler(ArchiveHandler):
             self.debug_info(f"{len(all_entries)} エントリを取得しました")
             return all_entries
             
+        except PermissionError as e:
+            self.debug_error(f"ディレクトリへのアクセス権限がありません: {abs_path} - {e}", trace=True)
+            raise IOError(f"ディレクトリへのアクセス権限がありません: {abs_path} - {str(e)}")
         except Exception as e:
             self.debug_error(f"エントリ一覧取得中にエラー: {e}", trace=True)
             import traceback
             traceback.print_exc()
-            return all_entries if all_entries else []
+            raise IOError(f"ディレクトリ読み込みエラー: {abs_path} - {str(e)}")
 
     def list_all_entries_from_bytes(self, archive_data: bytes, path: str = "") -> List[EntryInfo]:
         """
