@@ -74,6 +74,7 @@ def print_help():
     print("                  空白を含むパスは \"path/to file.zip\" のように引用符で囲みます")
     print("  j <path>      - 指定したパスに直接ジャンプ（jump）")
     print("  l <prefix>    - 指定された接頭辞に一致するエントリを表示（List entries）")
+    print("  lf            - 現在のフォルダ内のエントリのみを表示（List folder entries）")
     print("  c             - カレントエントリを表示（Current entry）")
     print("  n             - 次のエントリに移動（next）")
     print("  p             - 前のエントリに移動（prev）")
@@ -83,23 +84,48 @@ def print_help():
     print("  gl            - リストの末尾へ移動（go_last）") 
     print("  gt            - フォルダ内の先頭へ移動（go_top）")
     print("  ge            - フォルダ内の末尾へ移動（go_end）")
+    print("  A             - pagesの値を1と2の間で切り替え（Toggle pages）")
+    print("  T             - shiftの値をtrue/falseの間で切り替え（Toggle shift）")
     print("  D             - デバッグモードの切替（Toggle debug mode）")
     print("  ?             - このヘルプを表示")
     print("  Q             - 終了")
     print("")
 
 
-def set_archive_path(path: str) -> bool:
+def set_archive_path(path: str, pages: int = None, shift: bool = None) -> bool:
     """
     現在のアーカイブパスを設定
     
     Args:
         path: アーカイブファイルへのパス
+        pages: ページ数（省略可）
+        shift: シフトフラグ（省略可）
         
     Returns:
         成功した場合はTrue、失敗した場合はFalse
     """
     global current_archive_path, manager, browser
+    
+    # 現在のブラウザの状態を保存（再初期化用）
+    current_path = None
+    if browser and browser._entries:
+        try:
+            current_path = browser._entries[browser._current_idx]
+        except:
+            pass
+    
+    # 現在のpagesとshift設定を取得（再初期化用）
+    current_pages = 1
+    current_shift = False
+    if browser:
+        current_pages = getattr(browser, '_pages', 1)
+        current_shift = getattr(browser, '_shift', False)
+    
+    # 新しい設定が指定されていればそれを使用
+    if pages is not None:
+        current_pages = pages
+    if shift is not None:
+        current_shift = shift
     
     # パスを正規化（先頭の/は物理パスとして保持する）
     path = normalize_path(path)
@@ -131,12 +157,15 @@ def set_archive_path(path: str) -> bool:
             handler_name = handler_info.__class__.__name__
             log_print(INFO, f"このファイルは '{handler_name}' で処理可能です")          
             
-            # ブラウザを初期化
-            browser = get_browser(manager, "", None)
+            # ブラウザを初期化（pagesとshift設定を適用）
+            # 引数順序を修正: manager, path, exts, pages, shift
+            browser = get_browser(manager, current_path or "", None, current_pages, current_shift)
             if browser and browser._entries:
                 log_print(INFO, f"ブラウザを初期化しました。エントリ数: {len(browser._entries)}")
-                current_path = browser.get_current()[0] if browser.get_current() else "N/A"
-                log_print(INFO, f"カレントパス: {current_path}")
+                log_print(INFO, f"設定: pages={current_pages}, shift={current_shift}")
+                current_entries = browser.get_current()
+                current_path_info = current_entries[0] if current_entries else "N/A"
+                log_print(INFO, f"カレントパス: {current_path_info}")
                 return True
             else:
                 log_print(WARNING, "ブラウザは初期化されましたが、エントリが見つかりませんでした")
@@ -219,6 +248,44 @@ def list_matching_entries(prefix: str) -> bool:
     return True
 
 
+def list_folder_entries() -> bool:
+    """
+    現在のフォルダ内のエントリだけを表示する
+    
+    Returns:
+        エントリがある場合はTrue、ない場合はFalse
+    """
+    global browser
+    
+    if not browser or not browser._entries:
+        log_print(ERROR, "エラー: ブラウザが初期化されていないか、エントリがありません")
+        return False
+    
+    # 現在のフォルダを取得
+    current_folder = browser._get_current_folder()
+    print(f"\n現在のフォルダ '{current_folder}' のエントリ一覧:")
+    
+    # 同じフォルダのエントリを検索
+    folder_entries = []
+    for entry in browser._entries:
+        if os.path.dirname(entry) == current_folder:
+            folder_entries.append(entry)
+    
+    # 結果を表示
+    if not folder_entries:
+        print("フォルダ内にエントリがありません")
+        return False
+    
+    # エントリを表示
+    print("-" * 80)
+    for i, entry in enumerate(folder_entries, 1):
+        print(f"{i:4d}: {entry}")
+    print("-" * 80)
+    print(f"合計: {len(folder_entries)} エントリ")
+    
+    return True
+
+
 def main():
     """メインのCLIループ"""
     global debug_mode, browser
@@ -266,6 +333,48 @@ def main():
                 # Dコマンドでログレベル切り替え
                 toggle_log_level()
                 continue
+            elif cmd == 'A' and browser:  # Pから変更
+                # Aコマンドでpagesを1と2の間で切り替え
+                current_pages = getattr(browser, '_pages', 1)
+                new_pages = 2 if current_pages == 1 else 1
+                current_path = browser._entries[browser._current_idx] if browser._entries else ""
+                if current_archive_path:
+                    set_archive_path(current_archive_path, new_pages, getattr(browser, '_shift', False))
+                    # 元の位置にジャンプ
+                    if current_path:
+                        try:
+                            browser.jump(current_path)
+                        except:
+                            pass
+                    log_print(INFO, f"pagesを{new_pages}に変更しました")
+                    current_entries = browser.get_current()
+                    print("\n現在のカレントエントリ:")
+                    print("-" * 80)
+                    for i, entry in enumerate(current_entries, 1):
+                        print(f"{i}. {entry}")
+                    print("-" * 80)
+                continue
+            elif cmd == 'T' and browser:
+                # Tコマンドでshiftをtrue/falseの間で切り替え
+                current_shift = getattr(browser, '_shift', False)
+                new_shift = not current_shift
+                current_path = browser._entries[browser._current_idx] if browser._entries else ""
+                if current_archive_path:
+                    set_archive_path(current_archive_path, getattr(browser, '_pages', 1), new_shift)
+                    # 元の位置にジャンプ
+                    if current_path:
+                        try:
+                            browser.jump(current_path)
+                        except:
+                            pass
+                    log_print(INFO, f"shiftを{new_shift}に変更しました")
+                    current_entries = browser.get_current()
+                    print("\n現在のカレントエントリ:")
+                    print("-" * 80)
+                    for i, entry in enumerate(current_entries, 1):
+                        print(f"{i}. {entry}")
+                    print("-" * 80)
+                continue
             elif cmd == 'C':  # カレントエントリ表示コマンド
                 if not browser:
                     log_print(ERROR, "エラー: ブラウザが初期化されていません。先に 'S <path>' コマンドを実行してください。")
@@ -283,37 +392,88 @@ def main():
                 continue
             
             # ブラウザナビゲーションコマンド
-            if cmd_input == 'n' and browser:
+            if cmd_input == 'lf' and browser:
+                list_folder_entries()
+                continue
+            elif cmd_input == 'n' and browser:
                 path = browser.next()
                 log_print(INFO, f"次のエントリに移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
             elif cmd_input == 'p' and browser:
                 path = browser.prev()
                 log_print(INFO, f"前のエントリに移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
             elif cmd_input == 'nn' and browser:
                 path = browser.next_folder()
                 log_print(INFO, f"次のフォルダの先頭に移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
             elif cmd_input == 'pp' and browser:
                 path = browser.prev_folder()
                 log_print(INFO, f"前のフォルダの末尾に移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
             elif cmd_input == 'gf' and browser:
                 path = browser.go_first()
                 log_print(INFO, f"リストの先頭に移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
             elif cmd_input == 'gl' and browser:
                 path = browser.go_last()
                 log_print(INFO, f"リストの末尾に移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
             elif cmd_input == 'gt' and browser:
                 path = browser.go_top()
                 log_print(INFO, f"フォルダ内の先頭に移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
             elif cmd_input == 'ge' and browser:
                 path = browser.go_end()
                 log_print(INFO, f"フォルダ内の末尾に移動: {path}")
+                current_entries = browser.get_current()
+                print("\n現在のカレントエントリ:")
+                print("-" * 80)
+                for i, entry in enumerate(current_entries, 1):
+                    print(f"{i}. {entry}")
+                print("-" * 80)
                 continue
                 
             # 単一文字コマンドとその引数の処理

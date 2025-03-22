@@ -14,7 +14,7 @@ class ArchiveBrowser:
     フォルダ/書庫内のディレクトリを横断してファイルエントリを返す
     """
     
-    def __init__(self, manager: EnhancedArchiveManager, path: str = "", exts: List[str] = None):
+    def __init__(self, manager: EnhancedArchiveManager, path: str = "", exts: List[str] = None, pages: int = 1, shift: bool = False):
         """
         初期化関数
         
@@ -22,14 +22,22 @@ class ArchiveBrowser:
             manager: 拡張アーカイブマネージャー（必須）
             path: 初期パス（省略可）
             exts: 対象とする拡張子リスト（省略可）
+            pages: ページ数（1または2のみ有効、デフォルトは1）
+            shift: シフトフラグ（デフォルトはFalse）
         """
         if exts is None:
             exts = []
+            
+        # pagesの値を検証（1または2のみ有効）
+        if pages not in [1, 2]:
+            pages = 1  # 不正値の場合はデフォルト値に設定
             
         self._manager = manager
         self._entries = []
         self._current_idx = 0
         self._folder_indices = {}  # フォルダごとの開始インデックスを記録
+        self._pages = pages  # ページ数を設定
+        self._shift = shift  # シフトフラグを設定
         
         # エントリを収集
         self._collect_entries(exts)
@@ -103,22 +111,96 @@ class ArchiveBrowser:
     
     def next(self) -> str:
         """
-        次のエントリに移動。末尾だったら先頭へ
+        次のエントリに移動。pages分先に進む。
+        フォルダをまたぐ場合は次のフォルダの先頭に移動する。
         
         Returns:
             移動後のエントリパス
         """
-        self._current_idx = (self._current_idx + 1) % len(self._entries)
+        if not self._entries:
+            return ""
+            
+        current_folder = self._get_current_folder()
+        target_idx = self._current_idx
+        
+        # pages分だけ移動を試みる
+        for _ in range(self._pages):
+            target_idx = (target_idx + 1) % len(self._entries)
+            # フォルダをまたいだかチェック
+            if os.path.dirname(self._entries[target_idx]) != current_folder:
+                # 新しいフォルダの先頭に移動
+                next_folder = os.path.dirname(self._entries[target_idx])
+                # self._folder_indicesにフォルダ先頭のインデックスが記録されている場合はそれを使用
+                if next_folder in self._folder_indices:
+                    target_idx = self._folder_indices[next_folder]
+                break
+        
+        self._current_idx = target_idx
         return self._entries[self._current_idx]
     
     def prev(self) -> str:
         """
-        前のエントリに移動。先頭だったら末尾へ
+        前のエントリに移動。pagesの値とフォルダ境界に応じて挙動が変わる。
+        
+        - pagesが1の場合：単純に1つ前に移動
+        - pagesが2の場合：
+          - 同一フォルダ内の移動：2つ前に移動
+          - フォルダをまたぐ場合：フォルダの偶数/奇数とshiftフラグに応じて移動
         
         Returns:
             移動後のエントリパス
         """
-        self._current_idx = (self._current_idx - 1) % len(self._entries)
+        if not self._entries:
+            return ""
+            
+        # 現在のフォルダを取得
+        current_folder = self._get_current_folder()
+        
+        if self._pages == 1:
+            # pagesが1の場合は単純に1つ前に移動
+            self._current_idx = (self._current_idx - 1) % len(self._entries)
+            return self._entries[self._current_idx]
+        
+        # pagesが2の場合の処理 (複雑なフォルダまたぎルール)
+        
+        # 2つ前と1つ前のインデックスを計算
+        one_prev_idx = (self._current_idx - 1) % len(self._entries)
+        two_prev_idx = (self._current_idx - 2) % len(self._entries)
+        
+        # フォルダ情報を取得
+        one_prev_folder = os.path.dirname(self._entries[one_prev_idx])
+        
+        # 2つ前と1つ前が現在のフォルダと同じ場合
+        if one_prev_folder == current_folder and os.path.dirname(self._entries[two_prev_idx]) == current_folder:
+            # 2つ前に移動
+            self._current_idx = two_prev_idx
+            return self._entries[self._current_idx]
+        
+        # 2つ前と1つ前のフォルダが異なる場合
+        if os.path.dirname(self._entries[two_prev_idx]) != one_prev_folder:
+            # 1つ前に移動
+            self._current_idx = one_prev_idx
+            return self._entries[self._current_idx]
+        
+        # 前2つが同一の別フォルダの場合
+        # そのフォルダのファイル数をカウント
+        folder_start_idx = one_prev_idx
+        while folder_start_idx > 0 and os.path.dirname(self._entries[folder_start_idx - 1]) == one_prev_folder:
+            folder_start_idx -= 1
+            
+        folder_end_idx = one_prev_idx
+        while (folder_end_idx + 1) < len(self._entries) and os.path.dirname(self._entries[folder_end_idx + 1]) == one_prev_folder:
+            folder_end_idx += 1
+            
+        folder_files_count = folder_end_idx - folder_start_idx + 1
+        
+        # 偶数かつshiftがfalse、または奇数かつshiftがtrueの場合は2つ前へ
+        if (folder_files_count % 2 == 0 and not self._shift) or (folder_files_count % 2 == 1 and self._shift):
+            self._current_idx = two_prev_idx
+        else:
+            # それ以外の場合は1つ前へ
+            self._current_idx = one_prev_idx
+            
         return self._entries[self._current_idx]
     
     def next_folder(self) -> str:
@@ -141,34 +223,18 @@ class ArchiveBrowser:
     
     def prev_folder(self) -> str:
         """
-        前のフォルダの末尾へ移動
+        前のフォルダの先頭へ移動
+        まず現在のフォルダの先頭へ移動(go_top)してから、
+        prevメソッドを使って前に移動
         
         Returns:
             移動後のエントリパス
         """
-        current_folder = self._get_current_folder()
-        prev_folder_end = -1
+        # 現在のフォルダの先頭へ移動
+        self.go_top()
         
-        # 前のフォルダの最後のエントリを探す
-        for i in range(self._current_idx - 1, -1, -1):
-            folder = os.path.dirname(self._entries[i])
-            if folder != current_folder:
-                next_folder = folder
-                while i >= 0 and os.path.dirname(self._entries[i]) == next_folder:
-                    prev_folder_end = i
-                    i -= 1
-                break
-        
-        # 見つからなかったら最後のフォルダの末尾へ
-        if prev_folder_end == -1:
-            last_folder = os.path.dirname(self._entries[-1])
-            for i in range(len(self._entries) - 1, -1, -1):
-                if os.path.dirname(self._entries[i]) == last_folder:
-                    prev_folder_end = i
-                    break
-                    
-        self._current_idx = prev_folder_end
-        return self._entries[self._current_idx]
+        # prevメソッドを使って前に移動
+        return self.prev()
     
     def go_top(self) -> str:
         """
@@ -188,17 +254,17 @@ class ArchiveBrowser:
     def go_end(self) -> str:
         """
         フォルダ内の末尾へ移動
+        まず次のフォルダに移動(next_folder)してから、
+        prevメソッドを使って前に移動することで現在のフォルダの末尾へ
         
         Returns:
             移動後のエントリパス
         """
-        current_folder = self._get_current_folder()
-        for i in range(len(self._entries) - 1, -1, -1):
-            if os.path.dirname(self._entries[i]) == current_folder:
-                self._current_idx = i
-                return self._entries[self._current_idx]
-                
-        return self._entries[self._current_idx]
+        # まず次のフォルダの先頭へ移動
+        self.next_folder()
+        
+        # prevメソッドで前に移動（現在のフォルダの末尾になる）
+        return self.prev()
     
     def go_first(self) -> str:
         """
@@ -213,12 +279,17 @@ class ArchiveBrowser:
     def go_last(self) -> str:
         """
         リストの末尾へ移動
+        先頭に移動(go_first)してから、
+        prevメソッドを使って前に移動することで末尾へ
         
         Returns:
             移動後のエントリパス
         """
-        self._current_idx = len(self._entries) - 1
-        return self._entries[self._current_idx]
+        # まず先頭へ移動
+        self.go_first()
+        
+        # prevメソッドで前に移動（循環して末尾になる）
+        return self.prev()
     
     def jump(self, path: str) -> str:
         """
@@ -269,8 +340,67 @@ class ArchiveBrowser:
     def get_current(self) -> List[str]:
         """
         現在のカレント位置を返す
+        pagesとshiftの値、およびフォルダ内の位置に応じて1つまたは2つのパスを返す
+        
+        - pagesが1の場合：現在のパスだけのリストを返す
+        - pagesが2の場合：
+          - フォルダ先頭かつshiftがtrueの場合：現在のパスだけのリストを返す
+          - フォルダ末尾の場合：現在のパスだけのリストを返す
+          - それ以外の場合：現在のパスと次のパスのリストを返す
+            - ただし、フォルダ内相対位置に応じてカレント位置を調整する場合がある
         
         Returns:
-            現在のパスをリストとして返す（将来の拡張のため）
+            パスのリスト（1つまたは2つ）
         """
-        return [self._entries[self._current_idx]]
+        if not self._entries:
+            return []
+            
+        # pagesが1なら現在のパスだけのリストを返して終了
+        if self._pages == 1:
+            return [self._entries[self._current_idx]]
+        
+        # 現在のフォルダとフォルダ内での相対位置を取得
+        current_folder = self._get_current_folder()
+        
+        # フォルダの先頭位置を特定
+        folder_start_idx = self._current_idx
+        while folder_start_idx > 0 and os.path.dirname(self._entries[folder_start_idx - 1]) == current_folder:
+            folder_start_idx -= 1
+        
+        # フォルダの末尾かどうかを判定
+        is_folder_end = False
+        if self._current_idx == len(self._entries) - 1:
+            # ファイルリストの最後なら必ずフォルダの末尾
+            is_folder_end = True
+        else:
+            # 次のエントリが異なるフォルダならフォルダの末尾
+            next_folder = os.path.dirname(self._entries[self._current_idx + 1])
+            is_folder_end = (next_folder != current_folder)
+        
+        # フォルダ内での相対位置（0起点）
+        relative_pos = self._current_idx - folder_start_idx
+        
+        # フォルダ先頭でshiftがtrueなら現在のパスだけのリストを返して終了
+        if relative_pos == 0 and self._shift:
+            return [self._entries[self._current_idx]]
+            
+        # フォルダ末尾なら現在のパスだけのリストを返して終了
+        if is_folder_end:
+            return [self._entries[self._current_idx]]
+        
+        # 表示調整用の一時的なインデックス
+        display_idx = self._current_idx
+        
+        # shiftがtrueで現在のフォルダ相対位置が0起点で2以上の偶数ならカレント位置を１下げる
+        if self._shift and relative_pos >= 2 and relative_pos % 2 == 0:
+            display_idx = self._current_idx - 1
+        # shiftがfalseで現在のフォルダ相対位置が0起点で１以上の奇数ならカレント位置を１下げる
+        elif not self._shift and relative_pos >= 1 and relative_pos % 2 == 1:
+            display_idx = self._current_idx - 1
+            
+        # 次のエントリのインデックス（循環）
+        next_idx = (display_idx + 1) % len(self._entries)
+        
+        # 現在のパスと次のパスのリストを返す
+        return [self._entries[display_idx], self._entries[next_idx]]
+        
