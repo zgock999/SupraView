@@ -72,6 +72,19 @@ class EntryCacheManager:
         """
         return self._all_entries.copy()
     
+    def register_entry(self, key: str, entry: EntryInfo) -> None:
+        """
+        キーを指定してエントリをキャッシュに登録する
+        
+        Args:
+            key: キャッシュのキー（通常は相対パス）
+            entry: 登録するエントリ
+        """
+        # old_enhanced.pyでは直接self._all_entries[key] = entryを使用していたが、
+        # このメソッドを通して同じ処理を行うようにする
+        self._all_entries[key] = entry
+        self._manager.debug_debug(f"エントリ \"{key}\" をキャッシュに登録: {entry.name} ({entry.type.name})")
+    
     def add_entry_to_cache(self, entry: EntryInfo) -> None:
         """
         エントリをキャッシュに追加する
@@ -84,8 +97,7 @@ class EntryCacheManager:
         
         # old_enhanced.pyと同じ条件を使用して、空文字列キーも確実に登録
         if cache_key or cache_key == "":  # 空文字列キー（ルート）も登録可能に
-            self._all_entries[cache_key] = entry
-            self._manager.debug_debug(f"エントリ \"{cache_key}\" をキャッシュに登録: {entry.name} ({entry.type.name})")
+            self.register_entry(cache_key, entry)
         else:
             self._manager.debug_warning(f"キャッシュキーが空のためエントリを登録しません: {entry.name} ({entry.type.name})")
     
@@ -224,7 +236,7 @@ class EntryCacheManager:
             return False
             
         # ステータスを更新
-        old_status = entry.status
+        old_status = entry.status if hasattr(entry, 'status') else 'None'
         entry.status = status
         self._manager.debug_info(f"エントリステータスを更新: {path}, {old_status} -> {status}")
         return True

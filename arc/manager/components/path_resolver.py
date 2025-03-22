@@ -142,7 +142,7 @@ class PathResolver:
             
         Returns:
             (アーカイブパス, 内部パス, キャッシュされたバイト) のタプル
-            - アーカイブが見つからない場合は ("", "", None)
+            - アーカイブが見つからない場合は (current_path, "", None)
             - バイトデータが直接キャッシュされている場合は (仮想パス, internal_path, bytes)
             - 一時ファイルでキャッシュされている場合は (cache_path, internal_path, None)
             - 通常のアーカイブ内ファイルの場合は (archive_path, internal_path, None)

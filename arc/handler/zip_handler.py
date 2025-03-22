@@ -221,7 +221,8 @@ class ZipHandler(ArchiveHandler):
                             try:
                                 decoded = info.orig_filename.encode('cp437').decode(encoding, errors='replace')
                                 # デコードしたファイル名が元と違うかつ制御文字が少ない場合は採用
-                                if decoded != original_name and not any(ord(c) < 32 for c in decoded):
+                                if (decoded != original_name and not any(ord(c) < 32 for c in decoded) and
+                                        decoded not in structure['']['file_map']):
                                     name = decoded
                                     break
                             except UnicodeError:
@@ -772,12 +773,18 @@ class ZipHandler(ArchiveHandler):
         
         # ディレクトリエントリを追跡する辞書 (パス -> True)
         directory_entries = {}
+
+        # エンコード変換前の元のファイル名を格納するセット（重複排除用）
+        original_filenames = set()
         
         # まずinfolistからエントリ情報を取得
         for info in zf.infolist():
             # パスの正規化
             original_name = info.filename
             norm_path = original_name.replace('\\', '/')
+            
+            # 元のファイル名を記録（後で重複チェック用）
+            original_filenames.add(norm_path)
             
             # Macの隠しフォルダなどをスキップ
             if '__MACOSX' in norm_path:
@@ -827,6 +834,10 @@ class ZipHandler(ArchiveHandler):
         for name in zf.namelist():
             norm_path = name.replace('\\', '/')
             
+            # すでに処理済みのエントリはスキップ
+            if norm_path in original_filenames:
+                continue
+                
             # Macの隠しフォルダなどをスキップ
             if '__MACOSX' in norm_path:
                 continue
