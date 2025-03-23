@@ -39,9 +39,15 @@ class ArchiveBrowser:
         self._pages = pages  # ページ数を設定
         self._shift = shift  # シフトフラグを設定
         
+        # デバッグ情報追加
+        print(f"exts: {exts}")
+        cache = manager.get_entry_cache()
+        print(f"cache length: {len(cache)}")
+        
         # エントリを収集
         self._collect_entries(exts)
-        
+        print(f"self._entries length: {len(self._entries)}")
+
         # 初期位置を設定
         if path and self._entries:
             try:
@@ -63,13 +69,34 @@ class ArchiveBrowser:
         # エントリキャッシュから直接取得
         entry_cache = self._manager.get_entry_cache()
         
+        # 拡張子リストを正規化: 全て小文字で、ドットありに統一
+        normalized_exts = []
+        for ext in exts:
+            if ext:
+                if not ext.startswith('.'):
+                    normalized_ext = '.' + ext.lower()
+                else:
+                    normalized_ext = ext.lower()
+                normalized_exts.append(normalized_ext)
+        
+        print(f"正規化された拡張子リスト: {normalized_exts}")
+        
         # エントリキャッシュから条件に合うファイルエントリを抽出（アーカイブは対象外）
         for path, entry in entry_cache.items():
             # ファイルエントリの場合のみ処理
             if entry.type == EntryType.FILE:
                 # 拡張子条件を満たすものだけを抽出
-                if not exts or os.path.splitext(path)[1].lower()[1:] in exts:
+                if not normalized_exts:
+                    # 拡張子リストが空または指定なしの場合は全ファイルを対象とする
                     self._entries.append(path)
+                else:
+                    # ファイル拡張子を取得して小文字化
+                    _, ext = os.path.splitext(path.lower())
+                    # 拡張子リストに含まれるかチェック - 大文字小文字を区別しない比較
+                    if ext.lower() in normalized_exts:
+                        self._entries.append(path)
+        
+        print(f"収集されたエントリ数: {len(self._entries)}")
         
         # 自然順ソート (数字を考慮したソート)
         self._entries = self._natural_sort(self._entries)
@@ -403,4 +430,4 @@ class ArchiveBrowser:
         
         # 現在のパスと次のパスのリストを返す
         return [self._entries[display_idx], self._entries[next_idx]]
-        
+
