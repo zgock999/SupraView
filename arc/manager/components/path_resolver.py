@@ -289,9 +289,9 @@ class PathResolver:
         norm_path = path.replace('\\', '/')
         self._manager.debug_info(f"パスを解析: {norm_path}")
         
-        # 物理フォルダの場合は、すぐにそのパスをアーカイブパスとして返す
-        if os.path.isdir(norm_path):
-            self._manager.debug_info(f"物理フォルダを検出: {norm_path}")
+        # 物理フォルダまたはファイルの場合は、すぐにそのパスをアーカイブパスとして返す
+        if os.path.isdir(norm_path) or os.path.isfile(norm_path):
+            self._manager.debug_info(f"物理パスを検出: {norm_path}")
             return norm_path, ""
         
         # パスをコンポーネントに分解
@@ -321,6 +321,7 @@ class PathResolver:
             # ハンドラがcan_archive()を実装し、かつTrueを返すかチェック
             if handler and hasattr(handler, 'can_archive') and handler.can_archive():
                 # アーカイブハンドラが見つかった場合
+                abs_test_path = abs_test_path.rstrip('/')
                 self._manager.debug_info(f"アーカイブパス特定: {abs_test_path}, 内部パス: {remaining}")
                 return abs_test_path, remaining
             

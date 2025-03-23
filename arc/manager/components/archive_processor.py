@@ -5,9 +5,15 @@
 """
 
 import os
-from typing import List, Optional, Dict, Set
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import queue
+from typing import List, Optional, Dict, Set, Tuple, Deque
+from collections import deque
 
 from ...arc import EntryInfo, EntryType, EntryStatus
+from proc.util import get_cpu_count, get_optimal_worker_count
 
 class ArchiveProcessor:
     """
@@ -16,8 +22,12 @@ class ArchiveProcessor:
     アーカイブファイルの処理、内部エントリの抽出と登録を行います。
     """
     
-    # 最大ネスト階層の深さ制限（元の実装と同様に）
-    MAX_NEST_DEPTH = 5
+    # 絶対的な最大ネスト階層の深さ制限（無限ループ防止用の安全装置）
+    MAX_NEST_DEPTH = 20
+    
+    # マルチスレッド設定
+    MIN_ARCHIVES_FOR_THREADING = 3  # この数以上のアーカイブがある場合にマルチスレッドを使用
+    MAX_THREADS = 8  # 最大スレッド数の上限
     
     def __init__(self, manager):
         """
@@ -27,8 +37,59 @@ class ArchiveProcessor:
             manager: 親となるEnhancedArchiveManagerインスタンス
         """
         self._manager = manager
-        # 処理中のネストレベル（再帰制限用）
-        self._current_nest_level = 0
+        # パス解析用のスレッドローカルストレージ
+        self._thread_local = threading.local()
+        
+        # 最適なスレッド数を計算
+        self._thread_count = min(
+            get_optimal_worker_count(cpu_intensive=False, io_bound=True),
+            self.MAX_THREADS
+        )
+        self._manager.debug_info(f"アーカイブプロセッサーを初期化しました (スレッド数: {self._thread_count})")
+    
+    def _get_archive_path_depth(self, path: str) -> int:
+        """
+        アーカイブパスのネスト深度を計算する
+        
+        ※キューベース処理方式では深度はループ検出のみに使用される
+        
+        Args:
+            path: アーカイブパス
+        
+        Returns:
+            ネスト深度（書庫の中に書庫がある回数）
+        """
+        if not hasattr(self._thread_local, 'archive_path_depths'):
+            self._thread_local.archive_path_depths = {}
+            
+        # パスの深度がキャッシュされていればそれを返す
+        if path in self._thread_local.archive_path_depths:
+            return self._thread_local.archive_path_depths[path]
+            
+        # パスの深度を計算（親アーカイブの数をカウント）
+        depth = 0
+        current_path = path
+        
+        while True:
+            # パスを分析して親書庫と内部パスを特定
+            parent_path, internal_path = self._manager._path_resolver._analyze_path(current_path)
+            
+            # 親書庫が見つからなければ終了
+            if not parent_path or parent_path == current_path:
+                break
+                
+            # 親書庫が見つかった場合は深度を増加
+            depth += 1
+            current_path = parent_path
+            
+            # 安全装置：最大深度に達したら処理を中断（無限ループ防止）
+            if depth >= self.MAX_NEST_DEPTH:
+                self._manager.debug_warning(f"最大ネスト階層 ({self.MAX_NEST_DEPTH}) に達しました - パス: {path}. 潜在的な循環参照の可能性があります。")
+                break
+        
+        # 結果をキャッシュ
+        self._thread_local.archive_path_depths[path] = depth
+        return depth
     
     def process_archive_for_all_entries(self, base_path: str, arc_entry: EntryInfo, preload_content: bool = False) -> List[EntryInfo]:
         """
@@ -42,17 +103,17 @@ class ArchiveProcessor:
         Returns:
             アーカイブ内のすべてのエントリ
         """
-        # 循環参照防止とネスト深度チェック
-        if self._current_nest_level >= self.MAX_NEST_DEPTH:
-            self._manager.debug_warning(f"最大ネスト階層 ({self.MAX_NEST_DEPTH}) に達しました")
+        archive_path = arc_entry.path
+        thread_id = threading.get_ident()
+        
+        # 循環参照を検出するためだけにパス深度をチェック
+        depth = self._get_archive_path_depth(archive_path)
+        if depth >= self.MAX_NEST_DEPTH:
+            self._manager.debug_warning(f"安全装置: 最大ネスト階層に達しました - パス: {archive_path}, 深度: {depth} （スレッドID: {thread_id}）")
             return []
         
-        # 再帰レベルを増加
-        self._current_nest_level += 1
-        
         try:
-            archive_path = arc_entry.path
-            self._manager.debug_info(f"アーカイブ処理: {archive_path}")
+            self._manager.debug_info(f"アーカイブ処理: {archive_path} (ネスト階層: {depth}, スレッドID: {thread_id})")
             self._manager.debug_info(f"アーカイブエントリ ({arc_entry.path} )")
 
             # 書庫エントリの種別を確実にARCHIVEに設定
@@ -69,12 +130,29 @@ class ArchiveProcessor:
                         # アーカイブ内のすべてのエントリ情報を取得するには list_all_entries を使用
                         entries = handler.list_all_entries(archive_path)
                         if entries:
-                            # ネストされたエントリのパスを修正
-                            entries = self._manager.finalize_entries(entries, archive_path)
-                            # 結果を返す前にEntryTypeをマーク
-                            marked_entries = self._mark_archive_entries(entries)
-                            self._manager.debug_info(f"物理アーカイブから {len(marked_entries)} エントリを取得")
-                            return marked_entries
+                            self._manager.debug_info(f"物理アーカイブから {len(entries)} エントリを取得")
+                            
+                            # スレッドセーフにキャッシュ登録するためのロック取得
+                            cache_lock = getattr(self._manager, '_cache_lock', None)
+                            if cache_lock is None:
+                                self._manager._cache_lock = threading.RLock()
+                                cache_lock = self._manager._cache_lock
+                            
+                            # 得られたエントリを一つずつファイナライズしてからキャッシュに登録
+                            result_entries = []
+                            with cache_lock:
+                                for entry in entries:
+                                    # エントリをファイナライズ
+                                    finalized_entry = self._manager.finalize_entry(entry, archive_path)
+                                    # ファイナライズしたエントリをキャッシュに追加
+                                    entry_key = finalized_entry.rel_path.rstrip('/')
+                                    if entry_key or entry_key == "":  # 空文字列キー（ルート）も登録可能に
+                                        self._manager._entry_cache.register_entry(entry_key, finalized_entry)
+                                        self._manager.debug_debug(f"物理ファイルのエントリを即時キャッシュに登録 (スレッドID: {thread_id}): {entry_key}")
+                                    # 結果リストに追加
+                                    result_entries.append(finalized_entry)
+                            
+                            return result_entries
                         else:
                             self._manager.debug_warning(f"ハンドラはエントリを返しませんでした: {handler.__class__.__name__}")
                     except (IOError, PermissionError) as e:
@@ -221,8 +299,15 @@ class ArchiveProcessor:
                 self._manager.debug_warning(f"エントリが取得できませんでした")
                 return []
                 
-            # 7. エントリリストの処理 - パスの修正とファイナライズを同時に行う
+            # 7. エントリリストの処理
             result_entries = []
+            
+            # スレッドセーフにキャッシュ登録するためのロック取得
+            # すでにキャッシュロックがManagerにあるならそれを使用、なければ作成
+            cache_lock = getattr(self._manager, '_cache_lock', None)
+            if cache_lock is None:
+                self._manager._cache_lock = threading.RLock()
+                cache_lock = self._manager._cache_lock
             
             for entry in entries:
                 # パスを構築
@@ -246,28 +331,23 @@ class ArchiveProcessor:
                 # 作成したエントリを即座にファイナライズ
                 finalized_entry = self._manager.finalize_entry(new_entry, arc_entry.path)
                 
+                # ファイナライズしたエントリをすぐにキャッシュに登録（マルチスレッドセーフに）
+                with cache_lock:
+                    entry_key = finalized_entry.rel_path.rstrip('/')
+                    if entry_key or entry_key == "":  # 空文字列キー（ルート）も登録可能に
+                        self._manager._entry_cache.register_entry(entry_key, finalized_entry)
+                        self._manager.debug_debug(f"エントリを即時キャッシュに登録 (スレッドID: {thread_id}): {entry_key}")
+                
                 # エントリを結果に追加
                 result_entries.append(finalized_entry)
             
-            # 8. アーカイブエントリを識別
-            marked_entries = self._mark_archive_entries(result_entries)
-            
-            # 9. キャッシュに保存 - 各エントリを個別に登録（オリジナルの実装方法を使用）
-            self._manager.debug_info(f"{len(result_entries)} エントリをキャッシュに登録")
-            
-            # 各エントリを個別にキャッシュに追加（パスをキーとして使用）
-            for entry in result_entries:
-                # キャッシュ登録用のキー（相対パス）を取得し、末尾の/を取り除く
-                entry_key = entry.rel_path.rstrip('/')
-                # キャッシュに登録（オリジナルの方法で直接エントリを登録）
-                if entry_key or entry_key == "":  # 空文字列キー（ルート）も登録可能に
-                    self._manager._entry_cache.register_entry(entry_key, entry)
-                    self._manager.debug_debug(f"エントリ {entry_key} をキャッシュに登録")
+            # 9. キャッシュに保存 - スレッドセーフ対応のため、一括登録ではなく上記で個別登録済み
+            self._manager.debug_info(f"{len(result_entries)} エントリをキャッシュに登録済み")
             
             # キャッシュ状態のデバッグ情報
             self._manager.debug_debug(f"キャッシュ状況:")
             self._manager.debug_debug(f"  書庫キャッシュ: arc_entry.cache {'あり' if arc_entry.cache is not None else 'なし'}")
-            sample_paths = [e.path for e in marked_entries[:min(3, len(marked_entries))]]
+            sample_paths = [e.path for e in result_entries[:min(3, len(result_entries))]]
             self._manager.debug_debug(f"  キャッシュされたエントリパス例: {sample_paths}")
             
             # 処理が成功したらステータスをREADYに設定
@@ -289,194 +369,344 @@ class ArchiveProcessor:
         except Exception as e:
             self._manager.debug_error(f"_process_archive_for_all_entries でエラー: {e}", trace=True)
             return []
-        finally:
-            # 再帰レベルを減少
-            self._current_nest_level -= 1
     
-    def _mark_archive_entries(self, entries: List[EntryInfo]) -> List[EntryInfo]:
-        """
-        エントリリストの中からファイル拡張子がアーカイブのものをアーカイブタイプとしてマーク
-        
-        Args:
-            entries: 処理するエントリリスト
-            
-        Returns:
-            処理後のエントリリスト
-        """
-        if not entries:
-            return []
-            
-        for entry in entries:
-            if entry.type == EntryType.FILE and self._manager._path_resolver.is_archive_by_extension(entry.name):
-                entry.type = EntryType.ARCHIVE
-        return entries
-    
-    def list_all_entries(self, path: str, recursive: bool = True) -> List[EntryInfo]:
+    def list_all_entries(self, path: str) -> List[EntryInfo]:
         """
         指定されたパスの配下にあるすべてのエントリを再帰的に取得する
         
         Args:
             path: リストを取得するディレクトリやアーカイブのパス（ベースパス）
-            recursive: 再帰的に探索するかどうか（デフォルトはTrue）
             
         Returns:
             すべてのエントリ情報のリスト
         """
-        # 探索済みエントリとプロセス済みパスをリセット
-        self._manager._entry_cache.clear_cache()
-        self._manager._processed_paths = set()
-        
         # パスを正規化
-        path = path.replace('\\', '/')
+        norm_path = path.replace('\\', '/')
+        
+        # ループ検出 - 既に処理中のパスをチェック
+        if not hasattr(self._manager, '_processing_paths'):
+            self._manager._processing_paths = set()
+            
+        if norm_path in self._manager._processing_paths:
+            self._manager.debug_warning(f"既に処理中のパスが再度呼び出されました: {norm_path}")
+            return []  # 既に処理中なら空リストを返す
+        
+        # このパスを処理中としてマーク
+        self._manager._processing_paths.add(norm_path)
         
         try:
-            # キャッシュをクリアした後、最初にルートエントリをキャッシュに追加
-            self._manager.debug_debug(f"[list_all_entries] _ensure_root_entry 呼び出し前")
-            self._manager._root_manager.ensure_root_entry(path)
+            # 探索済みエントリとプロセス済みパスをリセット
+            # キャッシュをリセットし、保持している一時ファイルも削除
+            self._manager._entry_cache.reset_all_entries()
+            self._manager._processed_paths = set()
             
-            # 1. 最初にルートパス自身のエントリ情報を取得
-            root_entry_info = self._manager.get_entry_info("")
+            # パス深度のキャッシュをリセット
+            if hasattr(self._thread_local, 'archive_path_depths'):
+                self._thread_local.archive_path_depths = {}
             
-            # 2. ハンドラを取得（ファイル種別に合わせて適切なハンドラ）
-            handler = self._manager.get_handler(path)
-            if not handler:
-                self._manager.debug_warning(f"パス '{path}' のハンドラが見つかりません")
-                # ルートエントリがあれば、それだけを返す
-                if root_entry_info:
-                    return [root_entry_info]
-                return []
-            
-            self._manager.debug_info(f"'{handler.__class__.__name__}' を使用して再帰的にエントリを探索します")
-            
-            # 3. 最初のレベルのエントリリストを取得
             try:
-                raw_base_entries = handler.list_all_entries(path)
-                # 成功したらルートエントリをREADYに設定
-                if root_entry_info and hasattr(root_entry_info, 'status'):
-                    root_entry_info.status = EntryStatus.READY
+                # ルートエントリを取得（この処理で全エントリが取得され、キャッシュに登録される）
+                self._manager.debug_debug(f"[list_all_entries] ensure_root_entry 呼び出し開始: {path}")
+                root_entry = self._manager._root_manager.ensure_root_entry(path)
+                if not root_entry:
+                    self._manager.debug_warning(f"ルートエントリの取得に失敗しました: {path}")
+                    return []
+                    
+                self._manager.debug_info(f"ルートエントリを取得: {root_entry.path}")
+                
+                # ルートエントリ処理中に検出されたネスト書庫候補を取得
+                nested_archives = self._manager._root_manager.get_nested_archives()
+                self._manager.debug_info(f"ルートエントリ処理で {len(nested_archives)} 個のネスト書庫候補を検出")
+                
+                # ネストされたアーカイブを処理 - 初期キューにルート処理で見つかったネスト書庫を使用
+                if nested_archives:
+                    # ネスト書庫処理（キャッシュにエントリを追加するだけで結果は直接使わない）
+                    self._process_nested_archives_with_initial_queue(path, [], nested_archives)
+                    self._manager.debug_info(f"ネスト書庫の処理が完了しました")
+                else:
+                    self._manager.debug_info("ネスト書庫候補が見つからなかったため、ネスト処理をスキップします")
+                
+                # 最終的にキャッシュから全エントリリストを取得して返す
+                all_entries = list(self._manager._entry_cache.get_all_entries().values())
+                self._manager.debug_info(f"合計 {len(all_entries)} エントリを取得（ネスト書庫を含む）")
+                
+                return all_entries
+            
             except (IOError, PermissionError) as e:
-                # IO/Permissionエラーの場合はエントリステータスをBROKENに設定し処理を続行
-                self._manager.debug_error(f"ベースレベルのエントリリスト取得中にIO/Permissionエラー: {e}", trace=True)
-                if root_entry_info and hasattr(root_entry_info, 'status'):
-                    root_entry_info.status = EntryStatus.BROKEN
-                # エントリが取得できなくても、ルートエントリ自体は返す
-                return [root_entry_info] if root_entry_info else []
-            except Exception as e:
-                self._manager.debug_error(f"ベースレベルのエントリリスト取得中にエラー: {e}", trace=True)
-                # エントリが取得できなくても、ルートエントリ自体は返す
-                return [root_entry_info] if root_entry_info else []
-                
-            if not raw_base_entries:
-                self._manager.debug_warning(f"エントリが見つかりませんでした: {path}")
-                # エントリが取得できなくても、ルートエントリ自体は返す
-                if root_entry_info:
-                    self._manager.debug_info(f"ルートエントリのみを返します")
-                    return [root_entry_info]
+                # IO/Permissionエラーの場合はメッセージを記録し、可能であればルートエントリを返す
+                self._manager.debug_error(f"list_all_entries でIO/Permissionエラー: {e}", trace=True)
+                # エラーが発生しても、ルートエントリが取得できていれば返す
+                if 'root_entry' in locals() and root_entry:
+                    return [root_entry]
                 return []
+            except Exception as e:
+                self._manager.debug_error(f"list_all_entries エラー: {e}", trace=True)
+                # エラーが発生しても、ルートエントリが取得できていれば返す
+                if 'root_entry' in locals() and root_entry:
+                    return [root_entry]
+                return []
+        finally:
+            # このパスの処理が完了したのでマークを解除
+            self._manager._processing_paths.discard(norm_path)
+    
+    def _process_nested_archives_with_initial_queue(self, base_path: str, entries: List[EntryInfo], initial_archives: List[EntryInfo]) -> None:
+        """
+        ルートエントリ処理で見つかったネスト書庫をキューの初期値として処理する
+        
+        Args:
+            base_path: 基準となるパス
+            entries: 処理するエントリリスト（使用されない）
+            initial_archives: 初期キューとして使用するネスト書庫リスト
+        """
+        # 処理済みアーカイブのパスを追跡するセット
+        processed_archives = set()
+        
+        # ルート書庫(base_path)自体は処理対象外
+        self._manager.debug_info(f"ルート書庫自身はネスト処理対象ではありません: {base_path}")
+        processed_archives.add(base_path)
+        
+        # 初期キューを使用するので、エントリからアーカイブを抽出する必要はない
+        if not initial_archives:
+            self._manager.debug_info("初期ネスト書庫キューが空です")
+            return
             
-            # ハンドラが返したエントリを一つずつファイナライズ処理する
-            base_entries = []
-            for entry in raw_base_entries:
-                finalized_entry = self._manager.finalize_entry(entry, path)
-                base_entries.append(finalized_entry)
+        self._manager.debug_info(f"初期キューに {len(initial_archives)} 個のネスト書庫があります")
+        
+        # アーカイブ処理に同期または非同期処理のどちらを使うか決定
+        if len(initial_archives) < self.MIN_ARCHIVES_FOR_THREADING:
+            self._manager.debug_info(f"単一スレッドのキューベース処理を使用します (書庫数: {len(initial_archives)})")
+            self._process_nested_archives_with_queue(base_path, [], initial_archives, processed_archives)
+        else:
+            self._manager.debug_info(f"マルチスレッドのキューベース処理を使用します (書庫数: {len(initial_archives)}, スレッド数: {self._thread_count})")
+            self._process_nested_archives_with_thread_pool(base_path, [], initial_archives, processed_archives)
+    
+    # 以下の方法は後方互換性のために維持し、内部で新しいメソッドを呼び出す
+    def _process_nested_archives(self, base_path: str, entries: List[EntryInfo]) -> List[EntryInfo]:
+        """
+        ネストされたアーカイブを処理する（マルチスレッド対応）
+        
+        このメソッドは後方互換性のために維持されています。
+        新しいコードでは _process_nested_archives_with_initial_queue を使用してください。
+        
+        Args:
+            base_path: 基準となるパス
+            entries: 処理するエントリリスト
             
-            self._manager.debug_info(f"ベースレベルで {len(base_entries)} エントリを取得しました")
-            
-            # 5. 結果リストを構築（ルートエントリを先頭に）
-            all_entries = []
-            
-            # ルートエントリが取得できた場合は、リストの最初に追加
-            if root_entry_info:
-                # ファイナライズでアーカイブ判定が行われるため、ここではfinalize_entryを適用
-                root_entry_info = self._manager.finalize_entry(root_entry_info, path)
-                self._manager.debug_info(f"ルートエントリをリストに追加: {root_entry_info.path}")
-                all_entries.append(root_entry_info)
-            
-            # ベースエントリを結果リストに追加
-            all_entries.extend(base_entries)
-            
-            # 6. キャッシュに保存 - 各エントリを個別に登録
-            for entry in base_entries:
-                # 相対パスをキャッシュのキーとして使用し、末尾の/を取り除く
-                entry_key = entry.rel_path.rstrip('/')
-                # 空でない相対パスのみ登録
-                if entry_key or entry_key == "":  # 空文字列キー（ルート）も登録可能に
-                    self._manager._entry_cache.register_entry(entry_key, entry)
-                    self._manager.debug_debug(f"ベースエントリ {entry_key} をキャッシュに登録")
-            
-            # 7. アーカイブエントリを再帰的に処理
-            if recursive:
-                processed_archives = set()  # 処理済みアーカイブの追跡
-                archive_queue = []  # 処理するアーカイブのキュー
-                
-                # 最初のレベルでアーカイブを検索
-                for entry in base_entries:
-                    if entry.type == EntryType.ARCHIVE:
-                        archive_queue.append(entry)
-                
-                self._manager.debug_info(f"{len(archive_queue)} 個のネスト書庫を検出")
-                
-                # アーカイブを処理
-                while archive_queue:
-                    arc_entry = archive_queue.pop(0)
-                    
-                    # 既に処理済みならスキップ
-                    if arc_entry.path in processed_archives:
-                        continue
-                    
-                    # 処理済みとしてマーク
-                    processed_archives.add(arc_entry.path)
-                    
-                    # アーカイブの内容を処理（さらに下のレベルへ）
-                    try:
-                        nested_entries = self.process_archive_for_all_entries(path, arc_entry)
-                        
-                        # 結果を追加
-                        if nested_entries:
-                            all_entries.extend(nested_entries)
-                            
-                            # ネスト書庫内の各エントリを個別に登録
-                            for nested_entry in nested_entries:
-                                # エントリキー（相対パス）を正規化
-                                entry_key = nested_entry.rel_path
-                                # キーの正規化（先頭のスラッシュを削除、末尾のスラッシュを削除）
-                                if entry_key.startswith('/'):
-                                    entry_key = entry_key[1:]
-                                entry_key = entry_key.rstrip('/')
-                                
-                                # 空でない相対パスのみ登録
-                                if entry_key or entry_key == "":  # 空文字列キー（ルート）も登録可能に
-                                    self._manager._entry_cache.register_entry(entry_key, nested_entry)
-                                    
-                                    # ネストされたアーカイブも処理するためにキューに追加
-                                    if nested_entry.type == EntryType.ARCHIVE and nested_entry.path not in processed_archives:
-                                        archive_queue.append(nested_entry)
-                    except (IOError, PermissionError) as e:
-                        # IO/Permissionエラーの場合はエントリステータスをBROKENに設定し処理を続行
-                        self._manager.debug_error(f"アーカイブ処理中にIO/Permissionエラー: {arc_entry.path} - {e}")
-                        if hasattr(arc_entry, 'status'):
-                            arc_entry.status = EntryStatus.BROKEN
-                        else:
-                            arc_entry.status = EntryStatus.BROKEN
-                        continue
-                    except Exception as e:
-                        # エラーが発生してもBROKENとマークして処理を継続
-                        self._manager.debug_error(f"アーカイブ処理中にエラー: {arc_entry.path} - {e}")
-                        continue
-            
+        Returns:
+            処理後の全エントリリスト（ネストされたアーカイブの内容を含む）
+        """
+        # 処理結果を格納するリスト（元のエントリリストのコピー）
+        all_entries = list(entries)
+        
+        # 処理済みアーカイブのパスを追跡するセット
+        processed_archives = set()
+        
+        # ルート書庫(base_path)自体は処理対象外
+        self._manager.debug_info(f"ルート書庫自身はネスト処理対象ではありません: {base_path}")
+        processed_archives.add(base_path)
+        
+        # エントリからアーカイブタイプのものだけを抽出（ルート書庫を除く）
+        archive_entries = []
+        for entry in entries:
+            if entry.type == EntryType.ARCHIVE and entry.path != base_path:
+                # ネスト構造の循環参照を検出するために深度を確認（安全装置）
+                depth = self._get_archive_path_depth(entry.path)
+                if depth < self.MAX_NEST_DEPTH:
+                    archive_entries.append(entry)
+                    self._manager.debug_info(f"処理対象ネスト書庫を検出: {entry.path} (階層: {depth})")
+                else:
+                    self._manager.debug_warning(f"潜在的な循環参照を検出 - スキップ: {entry.path} (階層: {depth})")
+        
+        # アーカイブが見つからない場合は元のリストをそのまま返す
+        if not archive_entries:
+            self._manager.debug_info("処理対象のネスト書庫が見つかりません")
             return all_entries
-        except (IOError, PermissionError) as e:
-            # IO/Permissionエラーの場合はメッセージを記録し、可能であればルートエントリを返す
-            self._manager.debug_error(f"list_all_entries でIO/Permissionエラー: {e}", trace=True)
-            # エラーが発生しても、ルートエントリが取得できていれば返す
-            if 'root_entry_info' in locals() and root_entry_info:
-                if hasattr(root_entry_info, 'status'):
-                    root_entry_info.status = EntryStatus.BROKEN
-                return [root_entry_info]
-            return []
-        except Exception as e:
-            self._manager.debug_error(f"list_all_entries エラー: {e}", trace=True)
-            # エラーが発生しても、ルートエントリが取得できていれば返す
-            if 'root_entry_info' in locals() and root_entry_info:
-                return [root_entry_info]
-            return []
+            
+        self._manager.debug_info(f"{len(archive_entries)} 個のネスト書庫を検出")
+        
+        # アーカイブ処理に同期または非同期処理のどちらを使うか決定
+        if len(archive_entries) < self.MIN_ARCHIVES_FOR_THREADING:
+            self._manager.debug_info(f"単一スレッドのキューベース処理を使用します (書庫数: {len(archive_entries)})")
+            return self._process_nested_archives_with_queue(base_path, all_entries, archive_entries, processed_archives)
+        else:
+            self._manager.debug_info(f"マルチスレッドのキューベース処理を使用します (書庫数: {len(archive_entries)}, スレッド数: {self._thread_count})")
+            return self._process_nested_archives_with_thread_pool(base_path, all_entries, archive_entries, processed_archives)
+    
+    def _process_nested_archives_with_queue(
+        self, base_path: str, entries: List[EntryInfo], 
+        archive_entries: List[EntryInfo], processed_archives: Set[str]
+    ) -> None:
+        """
+        キューを使用してネストされたアーカイブを順次処理する（シングルスレッド）
+        
+        Args:
+            base_path: 基準となるパス
+            entries: 処理するエントリリスト（使用されない）
+            archive_entries: 処理するアーカイブエントリリスト（初期キュー）
+            processed_archives: 処理済みアーカイブパスのセット
+        """
+        # 処理すべきアーカイブのキューを作成
+        archive_queue = deque(archive_entries)
+        
+        # キューが空になるまで処理を続ける
+        processed_count = 0
+        while archive_queue:
+            # キューから次のアーカイブを取得
+            arc_entry = archive_queue.popleft()
+            print("processing" + arc_entry.path)
+            # 重複処理防止（既に処理済みならスキップ）
+            if arc_entry.path in processed_archives:
+                continue
+            
+            # 処理済みとしてマーク
+            processed_archives.add(arc_entry.path)
+            processed_count += 1
+            
+            # アーカイブ内のエントリを処理（深度制限のチェックはメソッド内で実施）
+            try:
+                nested_entries = self.process_archive_for_all_entries(base_path, arc_entry)
+                
+                if nested_entries:
+                    # エントリはprocess_archive_for_all_entriesの中でキャッシュに登録済み
+                    self._manager.debug_info(f"ネスト書庫から {len(nested_entries)} エントリを処理: {arc_entry.path}")
+                    
+                    # 新しく見つかったアーカイブをキューに追加（深度制限なし）
+                    new_archives_found = 0
+                    for nested_entry in nested_entries:
+                        if nested_entry.type == EntryType.ARCHIVE and nested_entry.path not in processed_archives:
+                            archive_queue.append(nested_entry)
+                            new_archives_found += 1
+                    
+                    if new_archives_found > 0:
+                        self._manager.debug_info(f"新しいネスト書庫 {new_archives_found} 個をキューに追加 (現在のキューサイズ: {len(archive_queue)})")
+            except Exception as e:
+                self._manager.debug_warning(f"ネスト書庫の処理でエラー: {arc_entry.path} - {e}")
+                # エラーが発生しても処理を継続
+        
+        self._manager.debug_info(f"キュー処理完了: {processed_count} 個のアーカイブを処理")
+    
+    def _process_nested_archives_with_thread_pool(
+        self, base_path: str, entries: List[EntryInfo], 
+        archive_entries: List[EntryInfo], processed_archives: Set[str]
+    ) -> None:
+        """
+        スレッドプールとキューを使用してネストされたアーカイブを並列処理する
+        
+        Args:
+            base_path: 基準となるパス
+            entries: 処理するエントリリスト（使用されない）
+            archive_entries: 処理するアーカイブエントリリスト（初期キュー）
+            processed_archives: 処理済みアーカイブパスのセット
+        """
+        # スレッド間で共有するキューとロック
+        task_queue = queue.Queue()
+        results_lock = threading.Lock()
+        
+        # 初期アーカイブをキューに追加
+        for arc_entry in archive_entries:
+            if arc_entry.path not in processed_archives:
+                task_queue.put(arc_entry)
+                processed_archives.add(arc_entry.path)
+                
+        # スレッドプールとワーカー関数を定義
+        def worker():
+            while True:
+                try:
+                    # キューから次のタスクを取得（非ブロッキング）
+                    try:
+                        arc_entry = task_queue.get(block=False)
+                    except queue.Empty:
+                        # キューが空になったら終了
+                        break
+                    
+                    # アーカイブ情報の表示
+                    thread_id = threading.get_ident()
+                    depth = self._get_archive_path_depth(arc_entry.path)
+                    self._manager.debug_info(f"スレッド処理: ネスト書庫 {arc_entry.path} (スレッドID: {thread_id}, 階層: {depth})")
+                    
+                    # アーカイブ内のエントリを処理
+                    try:
+                        nested_entries = self.process_archive_for_all_entries(base_path, arc_entry)
+                        
+                        if nested_entries:
+                            # エントリはprocess_archive_for_all_entriesの中でキャッシュに登録済み
+                            self._manager.debug_info(f"スレッド {thread_id}: ネスト書庫から {len(nested_entries)} エントリを処理: {arc_entry.path}")
+                            
+                            # 新しく見つかったアーカイブをキューに追加（深度制限なし）
+                            for nested_entry in nested_entries:
+                                if nested_entry.type == EntryType.ARCHIVE:
+                                    # 処理済みかどうかをチェック（ロックで保護）
+                                    with results_lock:
+                                        if nested_entry.path not in processed_archives:
+                                            # キューに追加し、処理済みとしてマーク
+                                            task_queue.put(nested_entry)
+                                            processed_archives.add(nested_entry.path)
+                                            self._manager.debug_info(f"スレッド {thread_id}: 新しいネスト書庫をキューに追加: {nested_entry.path}")
+                    except Exception as e:
+                        self._manager.debug_warning(f"スレッド {thread_id}: ネスト書庫の処理でエラー: {arc_entry.path} - {e}")
+                    
+                    # タスク完了を通知
+                    task_queue.task_done()
+                    
+                except Exception as e:
+                    self._manager.debug_error(f"ワーカースレッドでエラー: {e}", trace=True)
+                    # エラーが発生しても処理を継続
+        
+        # スレッドプールを作成して処理を開始
+        self._manager.debug_info(f"スレッドプールを作成: {self._thread_count} スレッド")
+        threads = []
+        for _ in range(self._thread_count):
+            thread = threading.Thread(target=worker)
+            thread.daemon = True  # メインスレッドが終了したら一緒に終了するように
+            thread.start()
+            threads.append(thread)
+        
+        # すべてのスレッドが終了するまで待機
+        for thread in threads:
+            thread.join()
+            
+        processed_count = len(processed_archives) - len(entries)  # 元のエントリは除外
+        self._manager.debug_info(f"並列処理完了: {processed_count} 個のアーカイブを処理")
+    
+    # 以下のメソッドは非推奨としてマーク
+    def _process_nested_archives_sequential(
+        self, base_path: str, entries: List[EntryInfo], 
+        archive_entries: List[EntryInfo], processed_archives: Set[str]
+    ) -> List[EntryInfo]:
+        """
+        ネストされたアーカイブを順次処理する（シングルスレッド）
+        
+        このメソッドは後方互換性のために維持されています。
+        代わりに _process_nested_archives_with_queue を使用してください。
+        
+        Args:
+            base_path: 基準となるパス
+            entries: 処理するエントリリスト
+            archive_entries: 処理するアーカイブエントリリスト
+            processed_archives: 処理済みアーカイブパスのセット
+            
+        Returns:
+            処理後の全エントリリスト
+        """
+        return self._process_nested_archives_with_queue(base_path, entries, archive_entries, processed_archives)
+    
+    def _process_nested_archives_parallel(
+        self, base_path: str, entries: List[EntryInfo], 
+        archive_entries: List[EntryInfo], processed_archives: Set[str]
+    ) -> List[EntryInfo]:
+        """
+        ネストされたアーカイブを並列処理する（マルチスレッド）
+        
+        このメソッドは後方互換性のために維持されています。
+        代わりに _process_nested_archives_with_thread_pool を使用してください。
+        
+        Args:
+            base_path: 基準となるパス
+            entries: 処理するエントリリスト
+            archive_entries: 処理するアーカイブエントリリスト
+            processed_archives: 処理済みアーカイブパスのセット
+            
+        Returns:
+            処理後の全エントリリスト
+        """
+        return self._process_nested_archives_with_thread_pool(base_path, entries, archive_entries, processed_archives)

@@ -23,11 +23,7 @@ class FileSystemHandler(ArchiveHandler):
     ArchiveHandlerインタフェースを通じて操作できるようにする
     """
     
-    # アーカイブとして認識する拡張子
-    KNOWN_ARCHIVE_EXTENSIONS = [
-        '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', 
-        '.lha', '.lzh', '.cab', '.iso'
-    ]
+    # アーカイブとして認識する拡張子の定義を削除
     
     @property
     def supported_extensions(self) -> List[str]:
@@ -47,9 +43,10 @@ class FileSystemHandler(ArchiveHandler):
         Args:
             extensions: アーカイブファイル拡張子のリスト
         """
-        self.KNOWN_ARCHIVE_EXTENSIONS = extensions
+        # アーカイブ拡張子のリストは参照用に保持するが、
+        # ファイルの種類判定には使用しない
         self.debug_info(f"アーカイブ拡張子を設定: {extensions}")
-        
+    
     def can_handle(self, path: str) -> bool:
         """
         指定されたパスを処理できるかどうかを判定する
@@ -104,12 +101,7 @@ class FileSystemHandler(ArchiveHandler):
                 if os.path.isfile(abs_path):
                     entry = self.get_entry_info(abs_path)
                     if entry:
-                        # ZIPファイルの場合は確実にARCHIVEタイプにする
-                        if entry.type == EntryType.FILE:
-                            _, ext = os.path.splitext(abs_path.lower())
-                            if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
-                                entry.type = EntryType.ARCHIVE
-                                self.debug_info(f"ファイル {abs_path} をARCHIVEタイプに修正")
+                        # ファイル種別の判定を削除（マネージャ層で行う）
                         return [entry]
                     
                 return []
@@ -122,16 +114,12 @@ class FileSystemHandler(ArchiveHandler):
                         name = entry.name
                         full_path = os.path.join(abs_path, name)
                         
-                        # ファイルタイプを判定
+                        # ファイルタイプを判定（アーカイブ判定を削除）
                         if entry.is_dir():
                             entry_type = EntryType.DIRECTORY
                         else:
-                            # 拡張子をチェックしてアーカイブかどうかを判定
-                            _, ext = os.path.splitext(name.lower())
-                            if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
-                                entry_type = EntryType.ARCHIVE
-                            else:
-                                entry_type = EntryType.FILE
+                            # すべてのファイルをFILEとして扱う
+                            entry_type = EntryType.FILE
                         
                         # ファイル属性を取得
                         stat_info = entry.stat()
@@ -211,11 +199,8 @@ class FileSystemHandler(ArchiveHandler):
                             mtime = os.path.getmtime(item_path)
                             modified_time = datetime.fromtimestamp(mtime)
                             
-                            # アーカイブファイルかどうかをチェック
+                            # すべてのファイルをFILEとして扱う
                             file_type = EntryType.FILE
-                            _, ext = os.path.splitext(item.lower())
-                            if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
-                                file_type = EntryType.ARCHIVE
                             
                             # create_entry_infoを使用してエントリを作成
                             entry = self.create_entry_info(
@@ -240,11 +225,8 @@ class FileSystemHandler(ArchiveHandler):
                             mtime = os.path.getmtime(item_path)
                             modified_time = datetime.fromtimestamp(mtime)
                             
-                            # アーカイブファイルかどうかをチェック
+                            # すべてのファイルをFILEとして扱う
                             file_type = EntryType.FILE
-                            _, ext = os.path.splitext(item.lower())
-                            if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
-                                file_type = EntryType.ARCHIVE
                             
                             # create_entry_infoを使用してエントリを作成
                             entry = self.create_entry_info(
@@ -282,16 +264,12 @@ class FileSystemHandler(ArchiveHandler):
             # 基本情報を取得
             name = os.path.basename(abs_path)
             
-            # ファイルタイプを判定
+            # ファイルタイプを判定（アーカイブ判定を削除）
             if os.path.isdir(abs_path):
                 entry_type = EntryType.DIRECTORY
             elif os.path.isfile(abs_path):
-                # 拡張子をチェックしてアーカイブかどうかを判定
-                _, ext = os.path.splitext(name.lower())
-                if ext in self.KNOWN_ARCHIVE_EXTENSIONS:
-                    entry_type = EntryType.ARCHIVE
-                else:
-                    entry_type = EntryType.FILE
+                # すべてのファイルをFILEとして扱う
+                entry_type = EntryType.FILE
             else:
                 # シンボリックリンクなど
                 entry_type = EntryType.UNKNOWN
@@ -577,6 +555,9 @@ class FileSystemHandler(ArchiveHandler):
                             is_hidden = bool(stat_info.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN)
                         else:
                             is_hidden = file_name.startswith('.')
+                        
+                        # すべてのファイルをFILEとして扱う
+                        entry_type = EntryType.FILE
                                                
                         # create_entry_infoを使用してファイルエントリを作成
                         rel_path = self.to_relative_path(file_path)
@@ -584,7 +565,7 @@ class FileSystemHandler(ArchiveHandler):
                             name=file_name,
                             rel_path=rel_path,
                             name_in_arc=rel_path,
-                            type=EntryType.FILE,
+                            type=entry_type,
                             size=size,
                             modified_time=mtime,
                             created_time=ctime,

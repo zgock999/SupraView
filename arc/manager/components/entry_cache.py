@@ -27,6 +27,27 @@ class EntryCacheManager:
         # すべてのエントリを格納する辞書
         self._all_entries: Dict[str, EntryInfo] = {}
     
+    def __del__(self):
+        """
+        デコンストラクタ - オブジェクトが破棄される際に呼び出される
+        
+        このメソッドはプログラム終了時やオブジェクトの参照が切れた時に
+        システムによって自動的に呼び出され、一時ファイルの削除を確実に行います。
+        """
+        try:
+            # reset_all_entriesを呼び出して一時ファイルをクリーンアップ
+            self.reset_all_entries()
+            
+            # マネージャーがまだ存在するなら、ログを出力
+            if hasattr(self, '_manager') and self._manager:
+                self._manager.debug_info("EntryCacheManagerのクリーンアップが完了しました")
+        except Exception as e:
+            # デコンストラクタ内でのエラーはプログラムを終了させないように捕捉
+            if hasattr(self, '_manager') and self._manager:
+                self._manager.debug_warning(f"EntryCacheManagerのクリーンアップ中にエラーが発生しました: {e}")
+            # デコンストラクタのエラーをログに記録できない場合にもプログラムを停止させないよう、例外を無視
+            pass
+    
     def get_entry_info(self, path: str) -> Optional[EntryInfo]:
         """
         指定されたパスのエントリ情報を取得する
@@ -105,6 +126,38 @@ class EntryCacheManager:
         """キャッシュをクリアする"""
         self._all_entries = {}
         self._manager.debug_info("エントリキャッシュをクリアしました")
+    
+    def reset_all_entries(self) -> None:
+        """
+        キャッシュをリセットし、一時ファイルを削除する
+        
+        この処理は、_all_entriesの中のcache属性を持つエントリを検索し、
+        それが文字列であれば一時ファイルのパスとみなして削除してから、
+        エントリキャッシュをクリアします。
+        """
+        # 一時ファイルを削除
+        temp_files_deleted = 0
+        for entry_key, entry in self._all_entries.items():
+            if hasattr(entry, 'cache') and entry.cache is not None and isinstance(entry.cache, str):
+                temp_file_path = entry.cache
+                if os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                        temp_files_deleted += 1
+                        if hasattr(self, '_manager') and self._manager:
+                            self._manager.debug_info(f"一時ファイルを削除しました: {temp_file_path}")
+                    except Exception as e:
+                        if hasattr(self, '_manager') and self._manager:
+                            self._manager.debug_warning(f"一時ファイルの削除に失敗しました: {temp_file_path} - {e}")
+        
+        # キャッシュをクリア
+        self._all_entries = {}
+        
+        if hasattr(self, '_manager') and self._manager:
+            if temp_files_deleted > 0:
+                self._manager.debug_info(f"エントリキャッシュをリセットし、{temp_files_deleted}個の一時ファイルを削除しました")
+            else:
+                self._manager.debug_info("エントリキャッシュをリセットしました")
     
     def get_all_entries(self) -> Dict[str, EntryInfo]:
         """

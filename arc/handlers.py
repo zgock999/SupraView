@@ -17,12 +17,22 @@ def register_standard_handlers(manager: ArchiveManager) -> None:
     """
     # ファイルシステムハンドラ
     try:
-        from .handler.fs_handler import FileSystemHandler
+        # マルチスレッド対応FSハンドラを標準ハンドラとして使用
+        from .handler.mfs_handler import MultiThreadedFileSystemHandler
         print("FileSystemHandler登録中...")
-        fs_handler = FileSystemHandler()
+        # 上位層には「FileSystemHandler」として見せる
+        fs_handler = MultiThreadedFileSystemHandler()
         manager.register_handler(fs_handler)
     except Exception as e:
-        print(f"FileSystemHandler登録エラー: {e}")
+        # エラー時は従来のハンドラにフォールバック
+        try:
+            from .handler.fs_handler import FileSystemHandler
+            print(f"マルチスレッドFSハンドラの登録に失敗しました: {e}")
+            print("通常のFileSystemHandlerを代わりに登録します...")
+            fs_handler = FileSystemHandler()
+            manager.register_handler(fs_handler)
+        except Exception as fallback_e:
+            print(f"FileSystemHandler登録エラー: {fallback_e}")
     
     # ZIPハンドラ
     try:

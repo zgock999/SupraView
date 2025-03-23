@@ -174,7 +174,7 @@ class EnhancedArchiveManager(ArchiveManager):
         # その後、すべてのエントリリストを再帰的に取得
         try:
             self.debug_info("全エントリリストを取得中...")
-            entries = self.list_all_entries(path, recursive=True)
+            entries = self.list_all_entries(path)
             self.debug_info(f"{len(entries)} エントリを取得しました")
             return entries
         except Exception as e:
@@ -186,12 +186,12 @@ class EnhancedArchiveManager(ArchiveManager):
         
         Args:
             path: リストを取得するディレクトリやアーカイブのパス（ベースパス）
-            recursive: 再帰的に探索するかどうか（デフォルトはTrue）
+            recursive: 再帰的に探索するかどうか（互換性のため残しているが常に再帰）
             
         Returns:
             すべてのエントリ情報のリスト
         """
-        return self._archive_processor.list_all_entries(path, recursive)
+        return self._archive_processor.list_all_entries(path)
 
     def read_file(self, path: str) -> Optional[bytes]:
         """

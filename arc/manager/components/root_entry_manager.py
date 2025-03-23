@@ -6,7 +6,7 @@
 
 import os
 import datetime
-from typing import Optional
+from typing import Optional, List, Set
 
 from ...arc import EntryInfo, EntryType, EntryStatus
 
@@ -25,119 +25,24 @@ class RootEntryManager:
             manager: 親となるEnhancedArchiveManagerインスタンス
         """
         self._manager = manager
+        # ネスト書庫候補を保存する属性を追加
+        self._nested_archives = []
     
-    def get_raw_entry_info(self, path: str) -> Optional[EntryInfo]:
+    def get_nested_archives(self) -> List[EntryInfo]:
         """
-        指定されたパスのエントリ情報を取得する
+        ルートエントリの処理中に検出されたネスト書庫候補リストを取得する
         
-        Args:
-            path: 情報を取得するパス
-            
         Returns:
-            エントリ情報。取得できない場合はNone
+            ネスト書庫エントリのリスト
         """
-        if not os.path.exists(path):
-            self._manager.debug_warning(f"パス '{path}' は存在しません")
-            return None
-        
-        if os.path.isdir(path):
-            # フォルダの場合
-            return self._create_folder_entry(path)
-        elif os.path.isfile(path):
-            # ファイルの場合
-            return self._create_file_entry(path)
-        
-        return None
+        return self._nested_archives
     
-    def _create_folder_entry(self, path: str) -> EntryInfo:
+    def clear_nested_archives(self) -> None:
         """
-        フォルダのEntryInfoを作成する
-        
-        Args:
-            path: フォルダのパス
-            
-        Returns:
-            フォルダのEntryInfo
+        ネスト書庫候補リストをクリアする
         """
-        folder_name = os.path.basename(path.rstrip('/\\'))
-        if not folder_name:
-            if ':' in path:
-                # Windowsのドライブルート (C:\ など)
-                drive = path.split(':')[0]
-                folder_name = f"{drive}:"
-            elif path.startswith('//') or path.startswith('\\\\'):
-                # ネットワークパス
-                parts = path.replace('\\', '/').strip('/').split('/')
-                folder_name = parts[0] if parts else "Network"
-            elif path.startswith('/'):
-                # UNIXのルートディレクトリ
-                folder_name = "/"
-            else:
-                # その他の特殊ケース
-                folder_name = path.rstrip('/\\') or "Root"
-        
-        # 存在確認してステータスを設定
-        status = EntryStatus.READY if os.path.exists(path) else EntryStatus.BROKEN
-        
-        return EntryInfo(
-            name=folder_name,
-            path=path,
-            rel_path="",
-            type=EntryType.DIRECTORY,
-            size=0,
-            modified_time=None,
-            abs_path=path,
-            status=status
-        )
-    
-    def _create_file_entry(self, path: str) -> EntryInfo:
-        """
-        ファイルのEntryInfoを作成する
-        
-        Args:
-            path: ファイルのパス
-            
-        Returns:
-            ファイルのEntryInfo
-        """
-        try:
-            size = os.path.getsize(path)
-            mtime = os.path.getmtime(path)
-            modified_time = datetime.datetime.fromtimestamp(mtime)
-            
-            # アーカイブかどうか判定
-            file_type = EntryType.FILE
-            _, ext = os.path.splitext(path.lower())
-            if ext in self._manager._archive_extensions:
-                file_type = EntryType.ARCHIVE
-                
-            return EntryInfo(
-                name=os.path.basename(path),
-                path=path,
-                rel_path="",
-                type=file_type,
-                size=size,
-                modified_time=modified_time,
-                abs_path=path,
-                status=EntryStatus.READY  # ファイルが存在するのでREADY
-            )
-        except (IOError, PermissionError) as e:
-            # ファイルアクセス関連のエラーの場合はBROKENとしてマーク（トレースなし）
-            self._manager.debug_error(f"ファイル情報取得エラー: {path} - {e}")
-            return EntryInfo(
-                name=os.path.basename(path),
-                path=path,
-                rel_path="",
-                type=EntryType.FILE,
-                size=0,
-                modified_time=None,
-                abs_path=path,
-                status=EntryStatus.BROKEN  # エラーが発生したのでBROKEN
-            )
-        except Exception as e:
-            # その他の予期せぬエラーの場合はトレース付きでエラーを記録し、再スロー
-            self._manager.debug_error(f"ファイル情報取得中に予期せぬエラー: {path} - {e}", trace=True)
-            raise
+        self._nested_archives = []
+        self._manager.debug_info("ネスト書庫候補リストをクリアしました")
     
     def ensure_root_entry(self, path: str) -> Optional[EntryInfo]:
         """
@@ -148,182 +53,306 @@ class RootEntryManager:
             
         Returns:
             ルートエントリ。作成に失敗した場合はNone
+            
+        Raises:
+            FileNotFoundError: 指定されたパスが存在しない場合
+            RuntimeError: ハンドラが見つからない場合
+            Exception: その他の予期せぬエラーが発生した場合
         """
-        # 物理ファイルとして存在しないパスの場合は例外を投げる
-        if not os.path.exists(path):
-            self._manager.debug_error(f"パス '{path}' は物理ファイルとして存在しません")
-            raise FileNotFoundError(f"指定されたパス '{path}' が見つかりません")
-        
-        # キャッシュが既に初期化されているかチェック
-        if "" in self._manager._entry_cache.get_all_entries():
-            self._manager.debug_info(f"ルートエントリはキャッシュに既に存在します")
-            return self._manager._entry_cache.get_entry_info("")
-        
-        # カレントパスの種類に応じて処理を分ける
-        if os.path.isdir(path):
-            # フォルダの場合
-            root_entry = self._process_folder_root(path)
-        elif os.path.isfile(path):
-            # ファイルの場合
-            root_entry = self._process_file_root(path)
-        else:
-            self._manager.debug_error(f"パス '{path}' は未対応の種類です")
-            return None
-        
-        # 重要な属性を明示的に設定する
-        if root_entry:
-            root_entry.rel_path = ""
-            root_entry.abs_path = path
+        try:
+            # ネスト書庫候補リストをクリア
+            self.clear_nested_archives()
             
-            # ルートエントリをキャッシュに追加
-            self._manager._entry_cache.add_entry_to_cache(root_entry)
+            # 物理ファイルとして存在しないパスの場合は例外を投げる
+            if not os.path.exists(path):
+                self._manager.debug_error(f"パス '{path}' は物理ファイルとして存在しません")
+                raise FileNotFoundError(f"指定されたパス '{path}' が見つかりません")
             
-            # ルートエントリを返す
-            return root_entry
-        
-        return None
+            # キャッシュが既に初期化されているかチェック
+            if "" in self._manager._entry_cache.get_all_entries():
+                self._manager.debug_info(f"ルートエントリはキャッシュに既に存在します")
+                return self._manager._entry_cache.get_entry_info("")
+            
+            # 適切なハンドラを取得
+            handler = self._manager.get_handler(path)
+            
+            if not handler:
+                # ハンドラが見つからない場合は、プログラムのバグとして例外を発生させる
+                error_msg = f"パス '{path}' に対するハンドラが見つかりません。ハンドラの登録に問題があります。"
+                self._manager.debug_error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # ハンドラの種類に関わらず、統一した方法でルートエントリを処理
+            return self._process_root_with_handler(path, handler)
+        except (FileNotFoundError, RuntimeError):
+            # パスが存在しない場合やハンドラが見つからない場合は上位に例外を伝播させる
+            raise
+        except Exception as e:
+            # その他の予期せぬエラーの場合は上位に例外を伝播させる
+            self._manager.debug_error(f"ensure_root_entry で予期せぬエラー: {path} - {e}", trace=True)
+            raise
     
-    def _process_folder_root(self, path: str) -> Optional[EntryInfo]:
+    def _process_root_with_handler(self, path: str, handler) -> Optional[EntryInfo]:
         """
-        フォルダのルートエントリを処理する
+        ハンドラを使用してルートエントリを処理する
         
         Args:
-            path: フォルダのパス
+            path: 処理するパス
+            handler: 使用するハンドラ
             
         Returns:
             処理結果のルートエントリ
+            
+        Raises:
+            Exception: 予期せぬエラーが発生した場合
         """
-        self._manager.debug_info(f"物理フォルダのルートエントリを作成: {path}")
-        
-        # フォルダ用のルートエントリを作成
-        root_info = self._create_folder_entry(path)
-        
-        # 物理フォルダの内容をキャッシュに追加
         try:
-            folder_contents = []
+            self._manager.debug_info(f"ハンドラ {handler.__class__.__name__} を使用してルートエントリを処理: {path}")
             
-            for item in os.listdir(path):
-                item_path = os.path.join(path, item).replace('\\', '/')
-                rel_path = item  # ルートからの相対パス
+            # ルートエントリを OS の情報に基づいて直接構築する
+            try:
+                # パスの情報を取得
+                name = os.path.basename(path.rstrip('/\\')) or "Root"
                 
-                if os.path.isdir(item_path):
-                    # フォルダエントリの作成と追加
-                    entry = EntryInfo(
-                        name=item,
-                        path=item_path,
-                        rel_path=rel_path,
-                        type=EntryType.DIRECTORY,
-                        size=0,
-                        modified_time=None,
-                        abs_path=item_path,
-                        status=EntryStatus.READY  # 初期状態はREADY
-                    )
-                    folder_contents.append(entry)
-                    
-                    # エントリをキャッシュに追加
-                    self._manager._entry_cache.add_entry_to_cache(entry)
+                # ファイルタイプを判断
+                entry_type = EntryType.UNKNOWN
+                if os.path.isdir(path):
+                    entry_type = EntryType.DIRECTORY
+                elif os.path.isfile(path):
+                    # アーカイブかどうかをハンドラ対応で判定
+                    archive_handler = self._manager.get_handler(path)
+                    if archive_handler and hasattr(archive_handler, 'can_archive') and archive_handler.can_archive():
+                        entry_type = EntryType.ARCHIVE
+                        self._manager.debug_info(f"アーカイブハンドラが利用可能: {archive_handler.__class__.__name__}")
+                    else:
+                        entry_type = EntryType.FILE
+                
+                # ファイル情報を取得
+                stat_info = os.stat(path)
+                size = stat_info.st_size if entry_type != EntryType.DIRECTORY else 0
+                modified_time = datetime.datetime.fromtimestamp(stat_info.st_mtime)
+                created_time = datetime.datetime.fromtimestamp(stat_info.st_ctime)
+                
+                # 隠しファイルかどうか判定
+                is_hidden = False
+                if os.name == 'nt' and hasattr(stat_info, 'st_file_attributes'):
+                    import stat as stat_module
+                    is_hidden = bool(stat_info.st_file_attributes & stat_module.FILE_ATTRIBUTE_HIDDEN)
                 else:
-                    # ファイルエントリの作成と追加
-                    try:
-                        size = os.path.getsize(item_path)
-                        mtime = os.path.getmtime(item_path)
-                        modified_time = datetime.datetime.fromtimestamp(mtime)
-                        
-                        # アーカイブかどうか判定
-                        file_type = EntryType.FILE
-                        _, ext = os.path.splitext(item_path.lower())
-                        if ext in self._manager._archive_extensions:
-                            file_type = EntryType.ARCHIVE
-                        
-                        entry = EntryInfo(
-                            name=item,
-                            path=item_path,
-                            rel_path=rel_path,
-                            type=file_type,
-                            size=size,
-                            modified_time=modified_time,
-                            abs_path=item_path,
-                            status=EntryStatus.READY  # 初期状態はREADY
-                        )
-                        folder_contents.append(entry)
-                        
-                        # エントリをキャッシュに追加
-                        self._manager._entry_cache.add_entry_to_cache(entry)
-                    except (IOError, PermissionError) as e:
-                        # ファイルアクセス関連のエラーの場合はBROKENとしてマーク
-                        self._manager.debug_error(f"ファイル情報取得エラー: {item_path} - {e}")
-                        entry = EntryInfo(
-                            name=item,
-                            path=item_path,
-                            rel_path=rel_path,
-                            type=EntryType.FILE,
-                            size=0,
-                            modified_time=None,
-                            abs_path=item_path,
-                            status=EntryStatus.BROKEN  # エラー発生時はBROKEN
-                        )
-                        folder_contents.append(entry)
-                        self._manager._entry_cache.add_entry_to_cache(entry)
-                    except Exception as e:
-                        # その他の予期せぬエラーの場合はトレース付きで記録し、スキップ
-                        self._manager.debug_error(f"ファイル情報取得中に予期せぬエラー: {item_path} - {e}", trace=True)
-                        continue
+                    is_hidden = name.startswith('.')
+                
+                # ルートエントリを作成
+                root_info = EntryInfo(
+                    name=name,
+                    path=path,
+                    rel_path="",
+                    name_in_arc="",
+                    type=entry_type,
+                    size=size,
+                    modified_time=modified_time,
+                    created_time=created_time,
+                    abs_path=path,
+                    is_hidden=is_hidden,
+                    status=EntryStatus.READY
+                )
+                
+                self._manager.debug_info(f"OS情報からルートエントリを構築: {name} ({entry_type.name})")
             
-            self._manager.debug_info(f"フォルダ内容を処理: {path} ({len(folder_contents)} アイテム)")
+            except (IOError, PermissionError) as e:
+                # IO/権限エラーが発生した場合はBROKENなエントリを作成して続行
+                self._manager.debug_error(f"ルートエントリ情報取得エラー: {path} - {e}")
+                
+                # ファイルタイプを推測
+                entry_type = EntryType.UNKNOWN
+                if os.path.isdir(path):
+                    entry_type = EntryType.DIRECTORY
+                elif os.path.isfile(path):
+                    # アーカイブかどうかをハンドラ対応で判定
+                    archive_handler = self._manager.get_handler(path)
+                    if archive_handler and hasattr(archive_handler, 'can_archive') and archive_handler.can_archive():
+                        entry_type = EntryType.ARCHIVE
+                    else:
+                        entry_type = EntryType.FILE
+                
+                # ファイル名/ディレクトリ名を抽出
+                name = os.path.basename(path.rstrip('/\\')) or "Root"
+                
+                # BROKENステータスのエントリを作成
+                root_info = EntryInfo(
+                    name=name,
+                    path=path,
+                    rel_path="",
+                    name_in_arc="",
+                    type=entry_type,
+                    size=0,
+                    modified_time=None,
+                    abs_path=path,
+                    status=EntryStatus.BROKEN
+                )
+                
+                # キャッシュに追加して返す
+                self._manager._entry_cache.add_entry_to_cache(root_info)
+                self._manager.debug_info(f"BROKENステータスのルートエントリを作成: {path}")
+                return root_info
+                    
+            # ルートエントリをまずキャッシュに追加
+            self._manager._entry_cache.add_entry_to_cache(root_info)
+            self._manager.debug_info(f"ルートエントリをキャッシュに追加: {root_info.name}")
             
+            # エントリの種類に応じた処理
+            if os.path.isdir(path):
+                # ディレクトリの場合
+                self._manager.debug_info(f"ディレクトリのルートエントリを処理: {path}")
+                self._process_container_entries(path, handler, root_info)
+            elif os.path.isfile(path) and root_info.type == EntryType.ARCHIVE:
+                # アーカイブファイルの場合
+                self._manager.debug_info(f"アーカイブファイルのルートエントリを処理: {path}")
+                self._process_container_entries(path, handler, root_info)
+            else:
+                # 通常のファイルの場合
+                self._manager.debug_info(f"通常ファイルのルートエントリを処理: {path} (タイプ: {root_info.type.name})")
+                # 特に追加の処理は必要ない
+            
+            return root_info
+        
         except (IOError, PermissionError) as e:
-            self._manager.debug_error(f"フォルダ内容の取得エラー: {path} - {e}")
-            # フォルダ内容の取得に失敗した場合はルートエントリをBROKENとしてマーク
+            # IO/権限エラーはログに記録して処理を続行
+            self._manager.debug_error(f"_process_root_with_handler で IO/権限エラー: {path} - {e}")
+            
+            # ファイルタイプを推測
+            entry_type = EntryType.UNKNOWN
+            if os.path.isdir(path):
+                entry_type = EntryType.DIRECTORY
+            elif os.path.isfile(path):
+                # アーカイブかどうかをハンドラ対応で判定
+                archive_handler = self._manager.get_handler(path)
+                if archive_handler and hasattr(archive_handler, 'can_archive') and archive_handler.can_archive():
+                    entry_type = EntryType.ARCHIVE
+                else:
+                    entry_type = EntryType.FILE
+            
+            # ファイル名/ディレクトリ名を抽出
+            name = os.path.basename(path.rstrip('/\\')) or "Root"
+            
+            # BROKENステータスのエントリを作成
+            entry = EntryInfo(
+                name=name,
+                path=path,
+                rel_path="",
+                name_in_arc="",
+                type=entry_type,
+                size=0,
+                modified_time=None,
+                abs_path=path,
+                status=EntryStatus.BROKEN
+            )
+            
+            # キャッシュに追加
+            self._manager._entry_cache.add_entry_to_cache(entry)
+            
+            return entry
+        except Exception as e:
+            # その他の予期せぬエラーの場合は上位に例外を伝播させる
+            self._manager.debug_error(f"_process_root_with_handler で予期せぬエラー: {path} - {e}", trace=True)
+            raise
+    
+    def _process_container_entries(self, path: str, handler, root_info: EntryInfo) -> None:
+        """
+        ディレクトリまたはアーカイブエントリの内容を処理する（共通処理）
+        
+        Args:
+            path: 対象パス
+            handler: 使用するハンドラ
+            root_info: ルートエントリ情報
+            
+        Raises:
+            Exception: 予期せぬエラーが発生した場合
+        """
+        try:
+            # アーカイブハンドラか確認（アーカイブの場合のみチェック）
+            if root_info.type == EntryType.ARCHIVE and hasattr(handler, 'can_archive') and not handler.can_archive():
+                self._manager.debug_info(f"ハンドラ {handler.__class__.__name__} はアーカイブをサポートしていません")
+                return
+            
+            # コンテナ（ディレクトリまたはアーカイブ）種類の説明
+            container_type = "ディレクトリ" if root_info.type == EntryType.DIRECTORY else "アーカイブ"
+            
+            # ハンドラの list_all_entries を使用して再帰的にすべてのエントリを取得
+            self._manager.debug_info(f"{container_type}の再帰的なエントリを取得中: {path}")
+            try:
+                all_entries = handler.list_all_entries(path)
+            except (IOError, PermissionError) as e:
+                # 内容の取得に失敗した場合はルートエントリをBROKENとしてマーク
+                self._manager.debug_error(f"{container_type}内容の取得エラー: {path} - {e}")
+                root_info.status = EntryStatus.BROKEN
+                return
+            
+            if all_entries:
+                self._manager.debug_info(f"{container_type}から {len(all_entries)} エントリを取得 (再帰的)")
+                
+                # エントリをファイナライズしてから即時キャッシュに登録
+                for entry in all_entries:
+                    try:
+                        # エントリをファイナライズ
+                        finalized_entry = self._manager.finalize_entry(entry, path)
+                        
+                        # ファイナライズ後、即時にキャッシュに登録（二重ループ防止のため）
+                        self._manager._entry_cache.add_entry_to_cache(finalized_entry)
+                        
+                        # アーカイブタイプのエントリは無条件にネスト書庫候補リストに追加
+                        if finalized_entry.type == EntryType.ARCHIVE:
+                            self._nested_archives.append(finalized_entry)
+                            self._manager.debug_info(f"ネスト書庫候補を検出: {finalized_entry.path}")
+                    except (IOError, PermissionError) as e:
+                        # 個別エントリのエラーは無視して処理を続行（データ起因の問題）
+                        error_context = "エントリ" if root_info.type == EntryType.DIRECTORY else "アーカイブエントリ"
+                        self._manager.debug_warning(f"{error_context}処理エラー: {entry.path if hasattr(entry, 'path') else 'unknown'} - {e}")
+                    except Exception as e:
+                        # 予期せぬ例外（プログラム起因の問題）は伝播させる
+                        error_context = "エントリ" if root_info.type == EntryType.DIRECTORY else "アーカイブエントリ"
+                        self._manager.debug_error(f"{error_context}処理中に予期せぬエラー: {entry.path if hasattr(entry, 'path') else 'unknown'} - {e}", trace=True)
+                        raise
+                
+                # 検出されたネスト書庫候補数を報告
+                if self._nested_archives:
+                    self._manager.debug_info(f"合計 {len(self._nested_archives)} 個のネスト書庫候補を検出しました")
+            else:
+                self._manager.debug_info(f"{container_type}は空です: {path}")
+        except (IOError, PermissionError) as e:
+            # IO/権限エラーは正常に処理できるエラー（データ起因）
+            self._manager.debug_error(f"_process_container_entries で IO/権限エラー: {path} - {e}")
             root_info.status = EntryStatus.BROKEN
         except Exception as e:
-            # その他の予期せぬエラーの場合はトレース付きで記録し、再スロー
-            self._manager.debug_error(f"フォルダ内容の取得中に予期せぬエラー: {path} - {e}", trace=True)
+            # その他の予期せぬエラー（プログラム起因）の場合は上位層に例外を伝播
+            self._manager.debug_error(f"_process_container_entries で予期せぬエラー: {path} - {e}", trace=True)
+            root_info.status = EntryStatus.BROKEN
             raise
-        
-        return root_info
-    
-    def _process_file_root(self, path: str) -> Optional[EntryInfo]:
+
+    # 元のメソッドは削除または非推奨としてマーク
+    def _process_directory_entries(self, path: str, handler, root_info: EntryInfo) -> None:
         """
-        ファイルのルートエントリを処理する
+        ディレクトリエントリの内容を処理する
+        
+        このメソッドは後方互換性のために維持されています。
+        新しいコードでは _process_container_entries を使用してください。
         
         Args:
-            path: ファイルのパス
-            
-        Returns:
-            処理結果のルートエントリ
+            path: ディレクトリパス
+            handler: 使用するハンドラ
+            root_info: ルートエントリ情報
         """
-        self._manager.debug_info(f"アーカイブファイルのルートエントリを作成: {path}")
+        self._process_container_entries(path, handler, root_info)
+
+    def _process_archive_entries(self, path: str, handler, root_info: EntryInfo) -> None:
+        """
+        アーカイブファイルの内容を処理する
         
-        # ファイル用のルートエントリを作成
-        root_info = self._create_file_entry(path)
+        このメソッドは後方互換性のために維持されています。
+        新しいコードでは _process_container_entries を使用してください。
         
-        # アーカイブの場合、アーカイブ内のエントリを取得・登録
-        if root_info.type == EntryType.ARCHIVE:
-            try:
-                # ハンドラを取得
-                handler = self._manager.get_handler(path)
-                if handler:
-                    # ハンドラから直接エントリリストを取得
-                    try:
-                        direct_children = handler.list_all_entries(path)
-                        if direct_children:
-                            self._manager.debug_info(f"アーカイブから {len(direct_children)} エントリを取得")
-                            
-                            # エントリをファイナライズしてアーカイブを識別
-                            for entry in direct_children:
-                                finalized_entry = self._manager.finalize_entry(entry, path)
-                                
-                                # エントリをキャッシュに追加
-                                self._manager._entry_cache.add_entry_to_cache(finalized_entry)
-                        else:
-                            self._manager.debug_info(f"アーカイブは空です: {path}")
-                    except (IOError, PermissionError) as e:
-                        # アーカイブ内のエントリ取得に失敗した場合はルートエントリをBROKENとしてマーク
-                        self._manager.debug_error(f"アーカイブ内容の取得に失敗: {path} - {e}")
-                        root_info.status = EntryStatus.BROKEN
-            except Exception as e:
-                self._manager.debug_error(f"アーカイブのエントリ取得中にエラー: {e}", trace=True)
-                # エラーが発生した場合はルートエントリをBROKENとしてマーク
-                root_info.status = EntryStatus.BROKEN
-        
-        return root_info
+        Args:
+            path: アーカイブファイルパス
+            handler: 使用するハンドラ
+            root_info: ルートエントリ情報
+        """
+        self._process_container_entries(path, handler, root_info)

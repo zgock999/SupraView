@@ -325,7 +325,7 @@ class RarHandler(ArchiveHandler):
             # パスからRARファイルと内部パスを抽出
             archive_path, internal_path = self._split_path(path)
             
-            if not archive_path or not internal_path:
+            if not archive_path:
                 return None
                 
             # RARファイルを開いてエントリ情報を取得
