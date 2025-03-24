@@ -174,3 +174,5 @@ cython_debug/
 models/
 gfpgan/
 torch_models/
+vscode/
+.vscode/
