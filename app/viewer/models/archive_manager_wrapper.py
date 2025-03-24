@@ -1,8 +1,7 @@
 """
 アーカイブマネージャーラッパー
 
-arc.manager.enhanced.ArchiveManager のラッパークラス
-ビューアアプリケーション用にインターフェースを提供
+EnhancedArchiveManagerをラップして、アプリケーション固有の機能を追加する
 """
 
 import os
@@ -30,6 +29,10 @@ except ImportError as e:
 
 from ..debug_utils import ViewerDebugMixin
 
+# アーカイブブラウザのインポート
+from arc.browser.factory import get_browser
+from arc.browser.browser import ArchiveBrowser
+
 
 class ArchiveManagerWrapper(ViewerDebugMixin):
     """
@@ -53,6 +56,7 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
         # エントリキャッシュ
         self._cached_entries = {}
         self.debug_info("アーカイブマネージャーの初期化完了")
+        self._browser = None  # ブラウザインスタンスを保持する変数
     
     @property
     def current_path(self) -> str:
@@ -111,6 +115,10 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
             
             self.debug_info(f"パスが正常に開かれました: {path}")
             self.debug_info(f"カレントディレクトリをリセットしました: '{self._current_directory}'")
+            
+            # ブラウザインスタンスをリセット
+            self._browser = None
+            
             return True
         except Exception as e:
             self.debug_error(f"パスを開く際にエラーが発生しました: {e}", trace=self._debug_mode)
@@ -403,3 +411,67 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
             pass
         self._current_path = ""
         self._cached_entries = {}
+    
+    def get_browser(self, exts: List[str] = None, current_path: str = "", pages: int = 1, shift: bool = False) -> ArchiveBrowser:
+        """
+        アーカイブブラウザを取得または作成
+        
+        Args:
+            exts: ブラウズ対象の拡張子リスト（省略可能）
+            current_path: 現在のパス（省略可能）
+            pages: ページ数（1または2）（省略可能）
+            shift: シフトフラグ（省略可能）
+            
+        Returns:
+            ArchiveBrowserインスタンス
+        """
+        # 既存のブラウザインスタンスが存在しない、または再作成が必要な場合
+        if self._browser is None:
+            if self._debug_mode:
+                log_print(INFO, f"ブラウザを作成: exts={exts}, path={current_path}, pages={pages}, shift={shift}")
+            
+            # デフォルト拡張子の設定
+            if exts is None:
+                from decoder.interface import get_supported_image_extensions
+                exts = get_supported_image_extensions()
+                
+            # ブラウザインスタンスを作成
+            self._browser = get_browser(self._manager, current_path, exts, pages, shift)
+            
+        return self._browser
+    
+    def update_browser(self, current_path: str = "", pages: int = 1, shift: bool = False) -> ArchiveBrowser:
+        """
+        既存のブラウザパラメータを更新
+        
+        Args:
+            current_path: 現在のパス（省略可能）
+            pages: ページ数（1または2）（省略可能）
+            shift: シフトフラグ（省略可能）
+            
+        Returns:
+            更新されたArchiveBrowserインスタンス
+        """
+        # 前回と同じ拡張子を使用
+        exts = None
+        if self._browser is not None:
+            # ブラウザを再作成
+            if self._debug_mode:
+                log_print(INFO, f"ブラウザを更新: path={current_path}, pages={pages}, shift={shift}")
+            
+            # ブラウザインスタンスを作成し直す（前回と同じ拡張子）
+            self._browser = get_browser(self._manager, current_path, exts, pages, shift)
+            
+        else:
+            # 既存のブラウザがない場合は新規作成
+            if self._debug_mode:
+                log_print(INFO, f"ブラウザを新規作成: path={current_path}, pages={pages}, shift={shift}")
+            
+            # デフォルト拡張子の設定
+            from decoder.interface import get_supported_image_extensions
+            exts = get_supported_image_extensions()
+            
+            # ブラウザインスタンスを作成
+            self._browser = get_browser(self._manager, current_path, exts, pages, shift)
+            
+        return self._browser

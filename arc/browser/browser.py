@@ -40,13 +40,10 @@ class ArchiveBrowser:
         self._shift = shift  # シフトフラグを設定
         
         # デバッグ情報追加
-        print(f"exts: {exts}")
         cache = manager.get_entry_cache()
-        print(f"cache length: {len(cache)}")
         
         # エントリを収集
         self._collect_entries(exts)
-        print(f"self._entries length: {len(self._entries)}")
 
         # 初期位置を設定
         if path and self._entries:
@@ -333,7 +330,7 @@ class ArchiveBrowser:
         """
         if not self._entries:
             raise FileNotFoundError(f"パス '{path}' が見つかりません")
-        
+        print(f"ジャンプ先パス: {path}")        
         # パスから末尾の/を削除
         clean_path = path.rstrip('/')
         

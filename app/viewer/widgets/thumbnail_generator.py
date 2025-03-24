@@ -133,6 +133,9 @@ class ThumbnailGenerator:
         # ファイル種別ごとのデフォルトアイコンを初期化
         self._init_default_icons()
         
+        # キャンセル状態の追跡（追加）
+        self._is_cancelling = False
+        
         if self.debug_mode:
             log_print(DEBUG, f"ThumbnailGeneratorを初期化しました。サポート拡張子: {SUPPORTED_EXTENSIONS}")
     
@@ -160,6 +163,9 @@ class ThumbnailGenerator:
         """
         現在のサムネイル生成タスクをキャンセル
         """
+        # キャンセル状態を設定（追加）
+        self._is_cancelling = True
+        
         if self.current_task_id:
             if self.debug_mode:
                 log_print(DEBUG, f"サムネイル生成タスク {self.current_task_id} をキャンセルします")
@@ -182,6 +188,13 @@ class ThumbnailGenerator:
         
         # 現在のコンテキスト情報を記録（コンテキスト変更検出用）
         self._context_current_directory = None
+        
+        # キャンセル処理が完了したことを示すために少し待機
+        import time
+        time.sleep(0.05)  # 50ms待機
+        
+        # キャンセル状態をリセット（追加）
+        self._is_cancelling = False
     
     def generate_thumbnails(
         self,
@@ -203,6 +216,12 @@ class ThumbnailGenerator:
             thumbnail_size: サムネイルのサイズ
             current_directory: 現在表示中のディレクトリパス（相対パス）
         """
+        # キャンセル中の場合はすぐに完了とする（追加）
+        if self._is_cancelling:
+            if on_all_completed:
+                on_all_completed()
+            return
+        
         # 既存のタスクをキャンセル
         self.cancel_current_task()
         
@@ -236,6 +255,10 @@ class ThumbnailGenerator:
         def on_file_extracted(filename, file_data):
             # デバッグ出力を強化
             log_print(INFO, f"ファイル '{filename}' の抽出完了（{len(file_data)}バイト）、サムネイル生成を開始")
+            
+            # キャンセル中の場合は処理しない（追加）
+            if self._is_cancelling:
+                return
             
             # 抽出後にコンテキストが変更されていないかチェック（重要な改善）
             if current_directory != self._context_current_directory:
@@ -275,13 +298,22 @@ class ThumbnailGenerator:
         def on_extraction_error(task_id, error_info):
             log_print(ERROR, f"ファイル抽出エラー: {error_info[1]}")
             self.extraction_task_id = None  # タスクIDをクリア
+            
+            # キャンセルされた場合でも完了コールバックを呼び出す（追加）
+            if self._is_cancelling and on_all_completed:
+                on_all_completed()
+        
+        # キャンセル確認関数を追加
+        def is_extraction_cancelled():
+            return self._is_cancelling
         
         # ファイル抽出タスクを開始
         self.extraction_task_id = self.worker_manager.start_task(
             extractor.extract_files,
             on_file_extracted=on_file_extracted,
             on_result=on_extraction_completed,
-            on_error=on_extraction_error
+            on_error=on_extraction_error,
+            is_cancelled=is_extraction_cancelled  # キャンセル確認関数を追加
         )
         
         log_print(INFO, f"ファイル抽出タスク開始: {self.extraction_task_id}")
@@ -311,8 +343,8 @@ class ThumbnailGenerator:
             # 処理開始のログ
             log_print(INFO, f"サムネイル生成処理開始: {filename}")
             
-            # キャンセルチェック
-            if is_cancelled and is_cancelled():
+            # キャンセルチェック（クラスのキャンセル状態も確認）
+            if (is_cancelled and is_cancelled()) or self._is_cancelling:
                 log_print(INFO, f"サムネイル生成がキャンセルされました: {filename}")
                 return None
             
@@ -332,6 +364,11 @@ class ThumbnailGenerator:
             if img_array is None:
                 if self.debug_mode:
                     log_print(WARNING, f"画像のデコードに失敗: {filename}")
+                return None
+            
+            # キャンセルチェック（処理の途中でも確認）
+            if (is_cancelled and is_cancelled()) or self._is_cancelling:
+                log_print(INFO, f"サムネイル生成がキャンセルされました: {filename}")
                 return None
             
             # 進捗報告

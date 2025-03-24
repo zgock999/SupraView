@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-アーカイブビューア
+SupraViewのメインビューア実行モジュール
 
-フォルダとアーカイブ書庫のコンテンツをエクスプローラーの「大アイコン」表示と同様に
-表示するためのビューアアプリケーション。
+このモジュールはデバッグ実行用のエントリーポイントを提供します。
 """
 
 import os
@@ -33,7 +32,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout,
         QStatusBar, QMessageBox
     )
-    from PySide6.QtCore import Qt, QSize
+    from PySide6.QtCore import Qt, QSize, QCoreApplication
     from PySide6.QtGui import QDragEnterEvent, QDropEvent
 except ImportError:
     log_print(ERROR, "PySide6が必要です。pip install pyside6 でインストールしてください。")
@@ -145,6 +144,18 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
         # 読み込み状態通知用コールバックを追加
         self.file_action_handler.on_loading_start = self._handle_loading_start
         self.file_action_handler.on_loading_end = self._handle_loading_end
+        
+        # サムネイル生成スレッドのキャンセル用コールバックを設定（重要）
+        self.file_action_handler.cancel_thumbnails_callback = self._cancel_thumbnails
+    
+    def _cancel_thumbnails(self):
+        """サムネイル生成スレッドをキャンセルする"""
+        self.debug_info("サムネイル生成スレッドをキャンセルします")
+        # FileListViewのサムネイル生成タスクをキャンセル
+        if hasattr(self, 'file_view') and hasattr(self.file_view, 'handle_folder_changed'):
+            self.file_view.handle_folder_changed()
+            # サムネイルの完全停止を少し待機
+            QCoreApplication.processEvents()
     
     def contextMenuEvent(self, event):
         """コンテキストメニューイベント処理"""

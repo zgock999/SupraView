@@ -1,11 +1,12 @@
 """
-アーカイブビューアのエントリポイント
+SupraViewメインエントリポイント
 
-このモジュールはパッケージとして実行された場合（python -m app.viewer）の
-エントリポイントとして機能します。
+Pythonモジュールとして実行するためのエントリポイント
+`python -m app.viewer` として実行することができます
 """
 
+import sys
 from app.viewer.viewer import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -299,6 +299,35 @@ def get_supported_image_extensions() -> List[str]:
     return extensions
 
 
+def select_image_decoder(filepath: str) -> Optional[ImageDecoder]:
+    """
+    ファイルパスからそのファイルに適切なデコーダーを選択してインスタンスを返す
+    
+    Args:
+        filepath: デコードする画像ファイルのパス
+        
+    Returns:
+        選択されたImageDecoderのインスタンス、対応するデコーダーがない場合はNone
+    """
+    _, ext = os.path.splitext(filepath.lower())
+    if not ext:
+        log_print(WARNING, f"拡張子が指定されていません: {filepath}")
+        return None
+    
+    manager = get_decoder_manager()
+    decoder_class = manager.get_decoder_for_extension(ext)
+    
+    if decoder_class is None:
+        log_print(WARNING, f"拡張子'{ext}'に対応するデコーダーが見つかりません: {filepath}")
+        return None
+    
+    try:
+        return decoder_class()
+    except Exception as e:
+        log_print(ERROR, f"デコーダーのインスタンス化に失敗しました: {e}")
+        return None
+
+
 # テスト用のコード
 if __name__ == "__main__":
     # ロギングを設定

@@ -101,3 +101,47 @@ def get_stable_sort_key(sort_key):
         return [sort_key.lower()]
     else:
         return [str(sort_key)]
+
+
+def safe_compare(a, b):
+    """
+    型に関係なく安全に2つの値を比較する
+    
+    Args:
+        a: 比較する最初の値
+        b: 比較する2番目の値
+        
+    Returns:
+        a < b の場合は -1
+        a == b の場合は 0
+        a > b の場合は 1
+    """
+    # 同じ型の場合は直接比較
+    if type(a) == type(b):
+        return -1 if a < b else (1 if a > b else 0)
+    
+    # 異なる型の場合は文字列に変換して比較
+    a_str = str(a).lower()
+    b_str = str(b).lower()
+    return -1 if a_str < b_str else (1 if a_str > b_str else 0)
+
+
+def safe_sort_key(item):
+    """
+    ソート時に安全に使えるキー関数
+    
+    Args:
+        item: ソートするアイテム
+        
+    Returns:
+        ソートキー
+    """
+    if isinstance(item, (int, float)):
+        # 数値は数値として処理
+        return (0, item, "")
+    elif isinstance(item, str):
+        # 文字列は文字列として処理（小文字化）
+        return (1, 0, item.lower())
+    else:
+        # その他の型は文字列に変換
+        return (2, 0, str(item).lower())

@@ -7,6 +7,7 @@
 import os
 import sys
 import traceback
+import time
 from typing import Optional, Callable, Dict, Any, List
 
 # 親パッケージからインポートできるようにパスを調整
@@ -19,13 +20,14 @@ from arc.arc import EntryType
 
 try:
     from PySide6.QtWidgets import QMessageBox, QWidget, QApplication
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QCoreApplication
 except ImportError:
     log_print(ERROR, "PySide6が必要です。pip install pyside6 でインストールしてください。")
     sys.exit(1)
 
 from ..models.archive_manager_wrapper import ArchiveManagerWrapper
 from ..debug_utils import ViewerDebugMixin
+# 直接decoderモジュールからインポート
 from decoder.interface import get_supported_image_extensions
 
 
@@ -53,6 +55,9 @@ class FileActionHandler(ViewerDebugMixin):
         self.on_loading_start = None  # 読み込み開始時のコールバック
         self.on_loading_end = None  # 読み込み完了時のコールバック
         
+        # サムネイルキャンセル用コールバック（追加）
+        self.cancel_thumbnails_callback = None
+        
         # 最後に表示したステータスメッセージを保存
         self._last_status_message = ""
         
@@ -75,6 +80,19 @@ class FileActionHandler(ViewerDebugMixin):
         self.archive_manager.debug_mode = value
         self.debug_info(f"デバッグモードを {value} に設定しました")
     
+    def _wait_for_thumbnail_threads(self):
+        """サムネイル生成スレッドが停止するのを待機する"""
+        # サムネイル生成タスクをキャンセル
+        if self.cancel_thumbnails_callback and callable(self.cancel_thumbnails_callback):
+            self.debug_info("サムネイル生成スレッドのキャンセルを要求します")
+            self.cancel_thumbnails_callback()
+            
+            # キャンセル要求後、スレッドが完全に停止するまで少し待機
+            # これにより、サムネイルスレッドがエントリキャッシュにアクセスするのを防ぐ
+            for i in range(10):  # 最大500ms待機
+                QCoreApplication.processEvents()  # UIイベントを処理
+                time.sleep(0.05)  # 50ms待機
+    
     def open_path(self, path: str) -> bool:
         """
         指定されたパスを開く（ドロップ時または外部からの絶対パス指定のみ）
@@ -87,6 +105,9 @@ class FileActionHandler(ViewerDebugMixin):
         """
         try:
             self.debug_info(f"パスを開きます: {path}")
+            
+            # 重要: サムネイル生成スレッドを確実に停止させてからパスを開く
+            self._wait_for_thumbnail_threads()
             
             # 読み込み開始を通知（カーソルを砂時計に変更など）
             self._notify_loading_start()
@@ -148,6 +169,9 @@ class FileActionHandler(ViewerDebugMixin):
         Returns:
             bool: 成功したかどうか
         """
+        # サムネイル生成スレッドを確実に停止させる
+        self._wait_for_thumbnail_threads()
+        
         # 最初のみ許可される絶対パス（ドロップ/オープン時）
         if not self.archive_manager.current_path:
             return self.open_path(path)
@@ -179,6 +203,9 @@ class FileActionHandler(ViewerDebugMixin):
             bool: 成功したかどうか
         """
         try:
+            # サムネイル生成スレッドを確実に停止させる
+            self._wait_for_thumbnail_threads()
+            
             # パスを正規化
             path = normalize_path(path)
             self.debug_info(f"内部パスに移動: '{path}'")
@@ -226,6 +253,9 @@ class FileActionHandler(ViewerDebugMixin):
         Returns:
             bool: 処理に成功したかどうか
         """
+        # サムネイル生成スレッドを確実に停止させる
+        self._wait_for_thumbnail_threads()
+        
         if is_dir:
             # ディレクトリの場合は移動
             try:
@@ -283,7 +313,38 @@ class FileActionHandler(ViewerDebugMixin):
                 # 画像ファイルの場合はプレビューウィンドウを表示
                 if ext in self.supported_image_extensions:
                     self.debug_info(f"画像ファイルを開きます: {name}")
-                    return self._open_image_preview(name)
+                    
+                    # ベースパス相対のパスを正規化して取得
+                    # カレントディレクトリからのパスを構築
+                    if self.archive_manager.current_directory:
+                        # 空でないカレントディレクトリの場合は結合して正規化
+                        rel_path = normalize_path(os.path.join(self.archive_manager.current_directory, name))
+                    else:
+                        # ルートディレクトリの場合はそのまま（ただし正規化）
+                        rel_path = normalize_path(name)
+                    
+                    # 正しいベースパス相対のパスを使用（正規化済み）
+                    self.debug_info(f"プレビューウィンドウを開きます（正規化済みパス）: {rel_path}")
+                    
+                    try:
+                        from app.viewer.widgets.preview.window import ImagePreviewWindow
+                        
+                        preview_window = ImagePreviewWindow(
+                            archive_manager=self.archive_manager,
+                            initial_path=rel_path  # 正規化されたベースパス相対
+                        )
+                        preview_window.show()
+                        
+                        # ステータスメッセージを更新
+                        if self.on_status_message:
+                            self.on_status_message(f"プレビューウィンドウを開きました: {os.path.basename(name)}")
+                            
+                    except Exception as e:
+                        self._show_error("プレビューウィンドウの表示に失敗しました", str(e))
+                        if self.debug_mode:
+                            import traceback
+                            traceback.print_exc()
+                        return False
                 else:
                     # その他のファイルはhexdumpビューアを表示
                     self.debug_info(f"バイナリファイルを開きます: {name}")
@@ -306,9 +367,10 @@ class FileActionHandler(ViewerDebugMixin):
         Returns:
             成功したかどうか
         """
-        from app.viewer.widgets.preview import ImagePreviewWindow
-        
         try:
+            # 遅延インポートを使用して循環インポートを回避
+            from app.viewer.widgets.preview import ImagePreviewWindow
+            
             # ファイルデータを読み込む
             self.debug_info(f"画像ファイルを読み込みます: {path}")
             
@@ -471,3 +533,56 @@ class FileActionHandler(ViewerDebugMixin):
         """
         if self.on_status_message:
             self.on_status_message(message)
+    
+    def open_preview_window(self, item_name: str, dual_view=False):
+        """
+        プレビューウィンドウを開く
+        
+        Args:
+            item_name: プレビューするアイテムの名前（カレントディレクトリからの相対パス）
+            dual_view: デュアルビューモードを有効にするかどうか
+        """
+        try:
+            # 遅延インポートを使用して循環インポートを回避
+            from app.viewer.widgets.preview.window import ImagePreviewWindow
+            
+            if self.on_status_message:
+                self.on_status_message(f"プレビューウィンドウを開きます: {item_name}")
+            
+            # 現在のディレクトリを含む相対パスを生成
+            current_dir = self.archive_manager.current_directory
+            if (current_dir):
+                # カレントディレクトリがある場合は結合
+                full_item_path = os.path.join(current_dir, item_name).replace('\\', '/')
+            else:
+                # カレントディレクトリが空の場合はそのまま
+                full_item_path = item_name
+                
+            self.debug_info(f"プレビュー用の相対パス: {full_item_path}")
+            
+            # プレビューウィンドウを作成（相対パスも渡す）
+            preview = ImagePreviewWindow(
+                parent=self.parent_widget,
+                archive_manager=self.archive_manager,
+                initial_path=full_item_path,
+                dual_view=dual_view
+            )
+            
+            # プレビューウィンドウを表示
+            preview.show()
+            
+            if self.debug_mode:
+                log_print(INFO, f"プレビューウィンドウが開かれました: {item_name}")
+                
+            return preview
+            
+        except Exception as e:
+            if self.debug_mode:
+                log_print(ERROR, f"プレビューウィンドウの表示に失敗しました: {e}", trace=True)
+            else:
+                log_print(ERROR, f"プレビューウィンドウの表示に失敗しました: {e}")
+                
+            if self.on_status_message:
+                self.on_status_message(f"エラー: プレビューウィンドウの表示に失敗しました")
+                
+            return None

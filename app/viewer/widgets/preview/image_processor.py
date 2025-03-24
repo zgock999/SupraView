@@ -1,279 +1,154 @@
 """
 画像処理モジュール
 
-画像データのロード、変換、処理のためのユーティリティを提供します。
+画像データの処理やメタデータ取得などの機能を提供
 """
 
 import os
-import sys
-import io
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Tuple, Dict, Any, Optional
 import numpy as np
 
-# プロジェクトルートへのパスを追加
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from logutils import log_print, DEBUG, INFO, WARNING, ERROR
-
-# デコーダーインターフェースをインポート
-from decoder.interface import decode_image, get_supported_image_extensions
-
-# PILを使用して画像形式の変換とメタデータ抽出を行う
-try:
-    from PIL import Image
-    from PIL.ExifTags import TAGS
-    HAS_PIL = True
-except ImportError:
-    log_print(WARNING, "PIL（Pillow）が見つかりません。一部の画像形式が表示できない可能性があります。")
-    log_print(INFO, "pip install pillow でインストールすることをお勧めします。")
-    HAS_PIL = False
+from logutils import log_print, INFO, WARNING, ERROR, DEBUG
 
 try:
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QImage, QPixmap
+    from PySide6.QtGui import QPixmap, QImage
 except ImportError:
-    log_print(ERROR, "PySide6が必要です。pip install pyside6 でインストールしてください。")
-    sys.exit(1)
+    log_print(ERROR, "PySide6がインストールされていません")
+
+# decoderモジュールをインポート
+try:
+    from decoder import select_image_decoder, decode_image
+    DECODER_AVAILABLE = True
+except ImportError:
+    log_print(ERROR, "decoderモジュールがインポートできません。このアプリケーションの実行には必須です。")
+    DECODER_AVAILABLE = False
 
 
-# サポートする画像形式の拡張子
-SUPPORTED_EXTENSIONS = get_supported_image_extensions()
-
-
-def get_supported_extensions() -> list:
+def load_image_from_bytes(image_data: bytes, file_path: str = "") -> Tuple[Optional[QPixmap], Optional[np.ndarray], Dict[str, Any]]:
     """
-    サポートされている画像形式の拡張子のリストを取得
-    
-    Returns:
-        サポートされている拡張子のリスト
-    """
-    return SUPPORTED_EXTENSIONS
-
-
-def extract_image_info(image_data: bytes, path: str = None) -> Dict[str, Any]:
-    """
-    画像データからメタデータを抽出する
+    バイトデータから画像をロードし、QtのPixmapとNumpyの配列とメタデータ情報を返す
     
     Args:
-        image_data: 画像のバイトデータ
-        path: 画像のパス（オプション）
+        image_data: 画像データのバイト列
+        file_path: 画像のファイルパス（メタデータ取得用）
         
     Returns:
-        画像情報の辞書
+        (QPixmap, Numpy配列, メタデータ情報) のタプル
+        失敗した場合は (None, None, {})
     """
+    if not image_data:
+        return None, None, {}
+    
+    # 基本情報の初期化
     info = {}
     
-    # 基本的なファイル情報
-    if path:
-        info['filename'] = os.path.basename(path)
-        info['path'] = path
+    # ファイル名から拡張子を取得（小文字化）    
+    _, ext = os.path.splitext(file_path.lower()) if file_path else ("", "")
     
-    info['size_bytes'] = len(image_data)
-    
-    # PILが利用可能な場合はメタデータを抽出
-    if HAS_PIL:
-        try:
-            img = Image.open(io.BytesIO(image_data))
-            
-            # 基本情報
-            info['format'] = img.format
-            info['mode'] = img.mode
-            info['width'] = img.width
-            info['height'] = img.height
-            
-            # EXIF情報があれば抽出
-            if hasattr(img, '_getexif') and callable(img._getexif):
-                exif = img._getexif()
-                if exif:
-                    exif_data = {}
-                    for tag_id, value in exif.items():
-                        tag = TAGS.get(tag_id, tag_id)
-                        exif_data[tag] = value
-                    info['exif'] = exif_data
-            
-        except Exception as e:
-            log_print(ERROR, f"画像メタデータの抽出に失敗しました: {e}")
-    
-    return info
-
-
-def load_image_from_bytes(image_data: bytes, path: str = None) -> Tuple[Optional[QPixmap], Optional[np.ndarray], Dict[str, Any]]:
-    """
-    バイトデータから画像を読み込み、QPixmapとNumPy配列を返す
-    
-    Args:
-        image_data: 画像のバイトデータ
-        path: 画像のパス（情報表示用、省略可能）
-    
-    Returns:
-        (QPixmap, NumPy配列, 画像情報辞書) のタプル
-        失敗した場合はそれぞれNoneが返される
-    """
-    pixmap = None
-    numpy_array = None
-    image_info = {}
+    # ファイルサイズをメタデータに追加
+    info["file_size"] = len(image_data)
+    info["file_name"] = os.path.basename(file_path) if file_path else ""
     
     try:
-        # 画像情報を抽出
-        image_info = extract_image_info(image_data, path)
+        # モジュールが利用できない場合はエラー
+        if not DECODER_AVAILABLE:
+            raise ImportError("decoderモジュールが利用できないため、画像を読み込めません")
         
-        # まずデコーダーでNumPy配列への変換を試みる
-        if path:
-            filename = os.path.basename(path)
-            numpy_array = decode_image(filename, image_data)
-            
-            if numpy_array is not None:
-                log_print(INFO, f"デコーダーでデコードしました: 形状={numpy_array.shape}, dtype={numpy_array.dtype}")
-                
-                # NumPy配列からQPixmapを作成
-                pixmap = numpy_to_pixmap(numpy_array)
-                if pixmap is not None:
-                    log_print(INFO, "NumPy配列からQPixmapへの変換に成功しました")
-                    return pixmap, numpy_array, image_info
+        # デコードの詳細ログを追加
+        log_print(DEBUG, f"画像デコード開始: '{file_path}', サイズ: {len(image_data)} バイト")
         
-        # デコーダーが失敗した場合、QPixmapで直接読み込みを試みる
-        log_print(INFO, "デコーダーでのデコードに失敗したため、QPixmap直接読み込みを試みます")
-        pixmap = QPixmap()
-        loaded = pixmap.loadFromData(image_data)
+        # select_image_decoderを使用して適切なデコーダーを選択
+        decoder = select_image_decoder(file_path)
+        if not decoder:
+            raise ValueError(f"ファイル '{file_path}' に対応するデコーダーが見つかりません")
         
-        if not loaded:
-            # 標準の方法で読み込めない場合、PILを使用して変換を試みる
-            if HAS_PIL:
-                log_print(INFO, "QPixmapで直接読み込めないため、PILを使用して変換を試みます")
-                try:
-                    img = Image.open(io.BytesIO(image_data))
-                    # RGBAモードに変換して一貫性を確保
-                    if img.mode != 'RGBA':
-                        img = img.convert('RGBA')
-                    
-                    # PILのImageをQImageに変換
-                    qim = QImage(img.tobytes(), img.width, img.height, QImage.Format_RGBA8888)
-                    pixmap = QPixmap.fromImage(qim)
-                    loaded = True
-                except Exception as e:
-                    log_print(ERROR, f"PIL変換中にエラーが発生しました: {e}")
-                    return None, None, image_info
-            else:
-                log_print(ERROR, "画像形式がサポートされていません。PIL（Pillow）をインストールすると表示できる可能性があります")
-                return None, None, image_info
+        log_print(DEBUG, f"選択されたデコーダー: {decoder.__class__.__name__}")
         
-        if loaded and not pixmap.isNull():
-            return pixmap, numpy_array, image_info
-        else:
-            log_print(ERROR, "画像の読み込みに失敗しました")
-            return None, None, image_info
-            
-    except Exception as e:
-        log_print(ERROR, f"画像読み込み中にエラーが発生しました: {e}")
-        return None, None, image_info
-
-
-def numpy_to_pixmap(numpy_array: np.ndarray) -> Optional[QPixmap]:
-    """
-    NumPy配列からQPixmapを生成する
-    
-    Args:
-        numpy_array: 変換する画像データのNumPy配列
-    
-    Returns:
-        生成されたQPixmap、失敗した場合はNone
-    """
-    if numpy_array is None:
-        return None
-    
-    try:
-        # NumPy配列の形状を確認
+        # デコーダーを使用して画像をデコード
+        numpy_array = decoder.decode(image_data)
+        if numpy_array is None:
+            raise ValueError(f"画像のデコードに失敗しました: {file_path}")
+        
+        # numpy_arrayから画像情報を取得
         height, width = numpy_array.shape[:2]
         channels = 1 if len(numpy_array.shape) == 2 else numpy_array.shape[2]
         
-        # QImageの形式を決定
-        if channels == 1:
-            # グレースケール画像
-            q_image = QImage(numpy_array.data, width, height, width, QImage.Format_Grayscale8)
-        elif channels == 3:
-            # RGB画像
-            q_image = QImage(numpy_array.data, width, height, width * 3, QImage.Format_RGB888)
-        elif channels == 4:
-            # RGBA画像
-            q_image = QImage(numpy_array.data, width, height, width * 4, QImage.Format_RGBA8888)
+        log_print(DEBUG, f"デコード成功: {width}x{height}, チャンネル数: {channels}")
+        
+        info.update({
+            "width": width,
+            "height": height,
+            "channels": channels,
+            "format": ext[1:].upper() if ext else "Unknown",
+            "decoder": decoder.__class__.__name__
+        })
+        
+        # NumPy配列からQImageを作成
+        if channels == 1:  # グレースケール
+            img = QImage(numpy_array.data, width, height, width, QImage.Format_Grayscale8)
+        elif channels == 3:  # RGB
+            img = QImage(numpy_array.data, width, height, width * 3, QImage.Format_RGB888)
+        elif channels == 4:  # RGBA
+            img = QImage(numpy_array.data, width, height, width * 4, QImage.Format_RGBA8888)
         else:
-            log_print(ERROR, f"サポートされていないチャンネル数です: {channels}")
-            return None
-        
+            raise ValueError(f"サポートされていないチャンネル数: {channels}")
+                
         # QImageからQPixmapを作成
-        pixmap = QPixmap.fromImage(q_image)
+        pixmap = QPixmap.fromImage(img)
+        log_print(DEBUG, f"QPixmap作成完了: {pixmap.width()}x{pixmap.height()}")
         
-        if pixmap.isNull():
-            log_print(ERROR, "QPixmapの作成に失敗しました")
-            return None
-        
-        return pixmap
-        
+        return pixmap, numpy_array, info
+            
     except Exception as e:
-        log_print(ERROR, f"NumPy配列からQPixmapへの変換に失敗しました: {e}")
-        return None
+        log_print(ERROR, f"画像の読み込みに失敗しました: {e}")
+        import traceback
+        log_print(ERROR, traceback.format_exc())
+        return None, None, info
 
 
 def format_image_info(info: Dict[str, Any]) -> str:
     """
-    画像情報を人間が読みやすい形式にフォーマットする
+    画像情報を整形して文字列として返す
     
     Args:
         info: 画像情報の辞書
-    
+        
     Returns:
-        フォーマットされた情報文字列
+        整形された画像情報の文字列
     """
     if not info:
-        return "画像情報なし"
+        return "情報がありません"
     
     lines = []
     
-    # ファイル情報
-    if 'filename' in info:
-        lines.append(f"ファイル: {info['filename']}")
+    # 基本情報
+    if "file_name" in info:
+        lines.append(f"ファイル名: {info['file_name']}")
     
-    # 画像サイズ
-    if 'width' in info and 'height' in info:
+    if "width" in info and "height" in info:
         lines.append(f"サイズ: {info['width']}x{info['height']}ピクセル")
     
-    # ファイルサイズ
-    if 'size_bytes' in info:
-        size_kb = info['size_bytes'] / 1024
-        lines.append(f"ファイルサイズ: {size_kb:.1f} KB ({info['size_bytes']:,} バイト)")
+    if "format" in info:
+        lines.append(f"フォーマット: {info['format']}")
     
-    # 画像形式
-    if 'format' in info:
-        lines.append(f"形式: {info['format']}")
+    if "mode" in info:
+        lines.append(f"モード: {info['mode']}")
     
-    # カラーモード
-    if 'mode' in info:
-        lines.append(f"カラーモード: {info['mode']}")
+    if "channels" in info:
+        lines.append(f"チャンネル数: {info['channels']}")
     
-    # EXIF情報（重要なものだけ）
-    if 'exif' in info:
-        exif = info['exif']
-        
-        # カメラモデル
-        if 'Model' in exif:
-            lines.append(f"カメラ: {exif['Model']}")
-        
-        # 撮影日時
-        if 'DateTime' in exif:
-            lines.append(f"撮影日時: {exif['DateTime']}")
-        
-        # 露出時間
-        if 'ExposureTime' in exif:
-            exposure = exif['ExposureTime']
-            if isinstance(exposure, tuple) and len(exposure) == 2:
-                lines.append(f"露出時間: {exposure[0]}/{exposure[1]}秒")
-            else:
-                lines.append(f"露出時間: {exposure}")
-        
-        # ISO感度
-        if 'ISOSpeedRatings' in exif:
-            lines.append(f"ISO感度: {exif['ISOSpeedRatings']}")
+    if "decoder" in info:
+        lines.append(f"使用デコーダー: {info['decoder']}")
+    
+    if "file_size" in info:
+        size_kb = info["file_size"] / 1024
+        lines.append(f"ファイルサイズ: {size_kb:.1f} KB")
+    
+    # decoderから取得した追加情報（例えば画像の特殊な特性など）
+    if "decoder_info" in info:
+        lines.append("\nデコーダー情報:")
+        for key, value in info["decoder_info"].items():
+            if key not in ["width", "height"]:  # 既に表示済みの基本情報を除外
+                lines.append(f"  {key}: {value}")
     
     return "\n".join(lines)

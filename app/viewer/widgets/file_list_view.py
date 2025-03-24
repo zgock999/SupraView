@@ -29,6 +29,9 @@ except ImportError:
     log_print(ERROR, "PySide6が必要です。pip install pyside6 でインストールしてください。")
     sys.exit(1)
 
+# 既存の自然順ソートユーティリティをインポート
+from app.viewer.utils.sort import natural_sort_key, safe_sort_key
+
 # デコーダーサポートの拡張子を取得
 from decoder.interface import get_supported_image_extensions
 
@@ -101,27 +104,57 @@ class FileListModel(QStandardItemModel):
             parent_item.setData("..", Qt.UserRole + 1)  # name
             self.appendRow(parent_item)
         
+        # ディレクトリ項目とファイル項目をそれぞれ分ける
+        dirs = [item for item in items if item.get('is_dir', False)]
+        files = [item for item in items if not item.get('is_dir', False)]
+        
+        try:
+            # 安全なソートを試みる - エラーが発生した場合は安全なキー関数を使用
+            try:
+                # ディレクトリを自然順でソート（既存のモジュールを使用）
+                dirs.sort(key=lambda x: natural_sort_key(x['name']))
+            except TypeError:
+                # 型エラーが発生した場合は、安全なキー関数を使用
+                log_print(WARNING, "自然順ソート中にエラーが発生したため、安全なソート関数を使用します")
+                dirs.sort(key=lambda x: safe_sort_key(x['name']))
+        except Exception as e:
+            # それでもエラーが発生する場合は文字列に変換してソート
+            log_print(ERROR, f"ディレクトリのソート中にエラーが発生しました: {e}")
+            dirs.sort(key=lambda x: str(x.get('name', '')))
+        
         # ディレクトリ項目を上部に表示
-        for item in items:
-            if item.get('is_dir', False):
-                # アーカイブかどうかをチェック
-                is_archive = item.get('type', '') == 'ARCHIVE'
-                
-                # アイコンを選択（アーカイブならアーカイブアイコン、そうでなければフォルダアイコン）
-                icon = self.archive_icon if is_archive else self.folder_icon
-                
-                standard_item = QStandardItem(icon, item['name'])
-                standard_item.setData(True, Qt.UserRole)  # isDir
-                standard_item.setData(item['name'], Qt.UserRole + 1)  # name
-                # type情報を追加
-                standard_item.setData(item.get('type', ''), Qt.UserRole + 2)  # type
-                # その他の属性を設定する場合はここに追加
-                self.appendRow(standard_item)
+        for item in dirs:
+            # アーカイブかどうかをチェック
+            is_archive = item.get('type', '') == 'ARCHIVE'
+            
+            # アイコンを選択（アーカイブならアーカイブアイコン、そうでなければフォルダアイコン）
+            icon = self.archive_icon if is_archive else self.folder_icon
+            
+            standard_item = QStandardItem(icon, str(item['name']))  # 文字列に明示的に変換
+            standard_item.setData(True, Qt.UserRole)  # isDir
+            standard_item.setData(str(item['name']), Qt.UserRole + 1)  # name
+            # type情報を追加
+            standard_item.setData(item.get('type', ''), Qt.UserRole + 2)  # type
+            # その他の属性を設定する場合はここに追加
+            self.appendRow(standard_item)
+        
+        try:
+            # 安全なソートを試みる - エラーが発生した場合は安全なキー関数を使用
+            try:
+                # ファイル項目も自然順でソート（既存のモジュールを使用）
+                files.sort(key=lambda x: natural_sort_key(x['name']))
+            except TypeError:
+                # 型エラーが発生した場合は、安全なキー関数を使用
+                log_print(WARNING, "自然順ソート中にエラーが発生したため、安全なソート関数を使用します")
+                files.sort(key=lambda x: safe_sort_key(x['name']))
+        except Exception as e:
+            # それでもエラーが発生する場合は文字列に変換してソート
+            log_print(ERROR, f"ファイルのソート中にエラーが発生しました: {e}")
+            files.sort(key=lambda x: str(x.get('name', '')))
         
         # ファイル項目を下部に表示
-        file_items = [item for item in items if not item.get('is_dir', False)]
-        for item in file_items:
-            name = item['name']
+        for item in files:
+            name = str(item['name'])  # 文字列に明示的に変換
             # デフォルトアイコンを設定
             icon = self._get_icon_for_file(name)
             standard_item = QStandardItem(icon, name)
@@ -244,6 +277,9 @@ class FileListView(QListView):
         # サムネイルジェネレータの初期化
         self.thumbnail_generator = ThumbnailGenerator(debug_mode=False)
         
+        # サムネイル生成状態の追跡
+        self._thumbnail_generation_active = False
+        
         # シグナルをスロットに接続
         self.doubleClicked.connect(self._handle_item_activated)
         
@@ -321,8 +357,12 @@ class FileListView(QListView):
         既存のサムネイル生成タスクをキャンセルします。
         """
         # 進行中のサムネイル生成タスクをキャンセル
-        self.thumbnail_generator.cancel_current_task()
-        log_print(INFO, "ディレクトリ変更: すべてのサムネイル生成タスクをキャンセルしました")
+        if hasattr(self, 'thumbnail_generator'):
+            self.thumbnail_generator.cancel_current_task()
+            log_print(INFO, "ディレクトリ変更: すべてのサムネイル生成タスクをキャンセルしました")
+        
+        # サムネイル生成状態をリセット
+        self._thumbnail_generation_active = False
     
     def generate_thumbnails(self):
         """
@@ -332,23 +372,37 @@ class FileListView(QListView):
             log_print(WARNING, "アーカイブマネージャがNoneのため、サムネイル生成をスキップします")
             return
         
-        # サムネイル生成タスクをキャンセル
-        self.thumbnail_generator.cancel_current_task()
-        
-        # 明示的なログ出力を追加
-        log_print(INFO, f"FileListView: サムネイル生成を開始します - 現在のディレクトリ: {self.archive_manager.current_directory}")
-        log_print(INFO, f"FileListView: ファイルアイテム数: {len(self.file_model.file_items)}")
-        
-        # サムネイル生成を開始
-        self.thumbnail_generator.generate_thumbnails(
-            archive_manager=self.archive_manager,
-            file_items=self.file_model.file_items,
-            on_thumbnail_ready=self._update_thumbnail_callback,
-            thumbnail_size=QSize(64, 64)
-        )
-        
-        if self.file_model.debug_mode:
-            log_print(DEBUG, f"サムネイル生成を開始しました")
+        try:
+            # サムネイル生成タスクをキャンセル
+            self.thumbnail_generator.cancel_current_task()
+            
+            # 明示的なログ出力を追加
+            log_print(INFO, f"FileListView: サムネイル生成を開始します - 現在のディレクトリ: {self.archive_manager.current_directory}")
+            log_print(INFO, f"FileListView: ファイルアイテム数: {len(self.file_model.file_items)}")
+            
+            # サムネイル生成状態を更新
+            self._thumbnail_generation_active = True
+            
+            # サムネイル生成完了時のコールバックを追加
+            def on_all_completed():
+                self._thumbnail_generation_active = False
+                log_print(INFO, "サムネイル生成が完了しました")
+            
+            # サムネイル生成を開始
+            self.thumbnail_generator.generate_thumbnails(
+                archive_manager=self.archive_manager,
+                file_items=self.file_model.file_items,
+                on_thumbnail_ready=self._update_thumbnail_callback,
+                on_all_completed=on_all_completed,  # 完了時コールバックを追加
+                thumbnail_size=QSize(64, 64),
+                current_directory=self.archive_manager.current_directory  # 現在のディレクトリ情報を追加
+            )
+            
+            if self.file_model.debug_mode:
+                log_print(DEBUG, f"サムネイル生成を開始しました")
+        except Exception as e:
+            log_print(ERROR, f"サムネイル生成の開始中にエラーが発生しました: {e}")
+            self._thumbnail_generation_active = False
     
     def _update_thumbnail_callback(self, filename: str, icon: QIcon):
         """
@@ -358,11 +412,14 @@ class FileListView(QListView):
             filename: 更新するファイル名
             icon: 新しいアイコン
         """
-        # モデルの更新メソッドを呼び出す
-        self.file_model._update_thumbnail(filename, icon)
-        
-        # 更新を確実にビューに反映するために明示的にビューを更新
-        self.viewport().update()
+        try:
+            # モデルの更新メソッドを呼び出す
+            self.file_model._update_thumbnail(filename, icon)
+            
+            # 更新を確実にビューに反映するために明示的にビューを更新
+            self.viewport().update()
+        except Exception as e:
+            log_print(ERROR, f"サムネイル更新コールバック実行中にエラーが発生しました: {e}")
     
     def contextMenuEvent(self, event: QContextMenuEvent):
         """コンテキストメニューイベント処理"""
