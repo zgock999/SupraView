@@ -63,6 +63,20 @@ class ViewerContextMenu:
         self.root_action.triggered.connect(lambda: self._navigate_to("/"))
         self.folders_menu.addAction(self.root_action)
         
+        # セパレータを追加
+        self.menu.addSeparator()
+        
+        # 設定メニュー
+        self.settings_menu = QMenu("設定", parent)
+        
+        # 超解像設定アクション
+        self.sr_settings_action = QAction("超解像設定...", parent)
+        self.sr_settings_action.triggered.connect(self._on_show_sr_settings)
+        self.settings_menu.addAction(self.sr_settings_action)
+        
+        # 設定メニューを追加
+        self.menu.addMenu(self.settings_menu)
+        
         # フォルダツリー構造を保持する辞書
         self.folder_tree = {}
     
@@ -98,6 +112,12 @@ class ViewerContextMenu:
         
         if folder_path:
             self.open_callback(folder_path)
+    
+    def _on_show_sr_settings(self):
+        """「超解像設定」アクション"""
+        # 親ウィジェットの超解像設定ダイアログ表示メソッドを呼び出す
+        if hasattr(self.parent, 'show_sr_settings_dialog'):
+            self.parent.show_sr_settings_dialog()
     
     def update_from_cache(self, entry_cache: Dict[str, Any]):
         """
