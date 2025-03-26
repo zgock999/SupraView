@@ -27,6 +27,10 @@ except ImportError:
 
 # 内部モジュールをインポート
 from .image_processor import load_image_from_bytes, format_image_info
+# 画像ハンドラをインポート
+from .image_handler import ImageHandler
+# 新しい画像モデルをインポート
+from .image_model import ImageModel
 # 直接decoderモジュールからインポート
 from decoder.interface import get_supported_image_extensions
 from .navigation_bar import NavigationBar
@@ -60,22 +64,28 @@ class ImagePreviewWindow(QMainWindow):
         # アーカイブマネージャの参照を保存
         self.archive_manager = archive_manager
         
-        # デュアルビュー設定
-        self._dual_view = dual_view
-        
-        # アーカイブブラウザの参照を初期化
-        self._browser = None
-        self._browser_pages = 2 if dual_view else 1
-        self._browser_shift = False
-        
-        # 左右配置の設定を追加
-        self._right_to_left = False  # デフォルトは左から右
-        
         # 初期表示パスの保存
         self._initial_path = initial_path
         
-        # ハンドラクラスの初期化
-        self.display_handler = DisplayHandler(self)
+        # 画像モデルを初期化
+        self.image_model = ImageModel()
+        # 初期状態ではウィンドウに合わせるモードをONに設定
+        self.image_model.set_display_mode(True)
+        
+        # デュアルビュー設定をモデルに反映
+        if dual_view:
+            self.image_model.set_view_mode("dual_lr")  # デフォルトは左右
+        else:
+            self.image_model.set_view_mode("single")
+        
+        # アーカイブブラウザの参照を初期化
+        self._browser = None
+        
+        # 画像ハンドラの初期化（画像モデルを渡す）
+        self.image_handler = ImageHandler(self, archive_manager, self.image_model)
+        
+        # ハンドラクラスの初期化（画像モデルを渡す）
+        self.display_handler = DisplayHandler(self, self.image_model)
         self.event_handler = EventHandler(self)
         
         # UIコンポーネントのセットアップ
@@ -96,7 +106,7 @@ class ImagePreviewWindow(QMainWindow):
         # マウストラッキング有効化（マウス移動イベントを取得するため）
         self.setMouseTracking(True)
         self.central_widget.setMouseTracking(True)
-        if self._dual_view:
+        if self.image_model.is_dual_view():
             self.splitter.setMouseTracking(True)
             self.image_areas[0].setMouseTracking(True)
             self.image_areas[1].setMouseTracking(True)
@@ -153,18 +163,19 @@ class ImagePreviewWindow(QMainWindow):
             try:
                 # デコーダが対応している拡張子リストを取得
                 supported_exts = get_supported_image_extensions()
-                # デュアルビューに応じたページ数を設定
-                pages = 2 if self._dual_view else 1
-                self._browser_pages = pages
+                
+                # 画像モデルからブラウザの設定を取得
+                browser_pages = self.image_model.get_browser_pages()
+                browser_shift = self.image_model.is_browser_shift()
                 
                 # ブラウザを初期化（初期パスは指定せずに作成）
                 self._browser = self.archive_manager.get_browser(
                     exts=supported_exts,
                     current_path=path,
-                    pages=pages,
-                    shift=self._browser_shift
+                    pages=browser_pages,
+                    shift=browser_shift
                 )
-                log_print(INFO, f"アーカイブブラウザを初期化しました: pages={pages}, shift={self._browser_shift}")
+                log_print(INFO, f"アーカイブブラウザを初期化しました: pages={browser_pages}, shift={browser_shift}")
                 
                 # 初期パスが指定されていれば、明示的にjumpを呼び出して移動
                 if self._initial_path:
@@ -192,7 +203,7 @@ class ImagePreviewWindow(QMainWindow):
         # 画像エリアの作成
         self.image_areas = []
         
-        if self._dual_view:
+        if self.image_model.is_dual_view():
             # デュアルビューの場合はスプリッターを使用
             self.splitter = QSplitter(Qt.Horizontal)
             self.main_layout.addWidget(self.splitter)
@@ -218,6 +229,9 @@ class ImagePreviewWindow(QMainWindow):
         
         # 表示ハンドラに画像エリアを設定
         self.display_handler.setup_image_areas(self.image_areas)
+        
+        # 画像ハンドラに画像エリアを設定
+        self.image_handler.setup_image_areas(self.image_areas)
         
         # ステータスバーを追加
         self.statusbar = QStatusBar()
@@ -297,12 +311,16 @@ class ImagePreviewWindow(QMainWindow):
         
         try:
             # 現在の表示モード（ウィンドウ合わせか原寸大か）を保存
-            fit_to_window_mode = self.display_handler.is_fit_to_window_mode()
+            fit_to_window_mode = self.image_model.is_fit_to_window()
             
             # ブラウザから現在の画像パスを取得
             paths = self._browser.get_current()
             
-            log_print(DEBUG, f"ブラウザから取得したパス: {paths}, デュアルモード: {self._dual_view}")
+            # 画像モデルから表示モード情報を取得
+            dual_view = self.image_model.is_dual_view()
+            right_to_left = self.image_model.is_right_to_left()
+            
+            log_print(DEBUG, f"ブラウザから取得したパス: {paths}, デュアルモード: {dual_view}")
             log_print(DEBUG, f"現在のブラウザ設定: pages={self._browser._pages}, shift={self._browser._shift}")
             
             # 取得したパスを画像に読み込み
@@ -320,12 +338,10 @@ class ImagePreviewWindow(QMainWindow):
                     if len(self.image_areas) > 1 and self.image_areas[1]:
                         log_print(DEBUG, "2画面目をクリアします（1画像のみ）")
                         self.display_handler.clear_image(1)
-                # ここの条件分岐が重複していて問題を引き起こしている
-                elif len(paths) >= 2 and self._dual_view:
-                    # 修正: 重複していた条件分岐を削除し、正しい条件分岐のみを残す
+                elif len(paths) >= 2 and dual_view:
                     # 2画面の場合（デュアルビューが有効の場合のみ）
                     # 右左設定に応じてインデックスを調整
-                    if self._right_to_left:
+                    if right_to_left:
                         # 右から左への表示（index 0:右側, 1:左側）
                         self.load_image_from_path(paths[0], 0, use_browser_path=True)
                         self.load_image_from_path(paths[1], 1, use_browser_path=True)
@@ -334,7 +350,7 @@ class ImagePreviewWindow(QMainWindow):
                         self.load_image_from_path(paths[0], 0, use_browser_path=True)
                         self.load_image_from_path(paths[1], 1, use_browser_path=True)
                     
-                    log_print(DEBUG, f"デュアルモードで2画像を表示: RTL={self._right_to_left}")
+                    log_print(DEBUG, f"デュアルモードで2画像を表示: RTL={right_to_left}")
                 else:
                     # デュアルビューが無効または2つ以上のパスがある場合は最初の画像のみ表示
                     self.load_image_from_path(paths[0], 0, use_browser_path=True)
@@ -342,13 +358,11 @@ class ImagePreviewWindow(QMainWindow):
                         log_print(DEBUG, "2画面目をクリアします（デュアルビュー無効または画像不足）")
                         self.display_handler.clear_image(1)
                 
-                # 常にウィンドウに合わせる表示にする（初期設定）
-                # fit_to_window_modeの状態に関わらず、常にウィンドウに合わせるモードにする
-                self.display_handler.fit_to_window()
+                # 以前の表示モードを引き継ぐ
+                # 明示的に表示モードを適用（_refresh_display_modeを使用して一貫性を保つ）
+                self._refresh_display_mode(fit_to_window_mode)
                 
-                # コンテキストメニューの表示状態も更新
-                if hasattr(self, 'context_menu'):
-                    self.context_menu.update_display_mode(True) # 常にTrue（ウィンドウに合わせる）
+                log_print(DEBUG, f"画像更新後の表示モード: fit_to_window={fit_to_window_mode}")
         except Exception as e:
             log_print(ERROR, f"ブラウザからの画像更新に失敗しました: {e}")
             import traceback
@@ -370,56 +384,10 @@ class ImagePreviewWindow(QMainWindow):
         Returns:
             読み込みに成功した場合はTrue、失敗した場合はFalse
         """
-        if not self.archive_manager:
-            log_print(ERROR, "アーカイブマネージャが設定されていません")
-            self.statusbar.showMessage("エラー: アーカイブマネージャが設定されていません")
-            return False
+        # image_handlerに処理を委譲
+        success = self.image_handler.load_image_from_path(path, index, use_browser_path)
         
-        # インデックスの範囲を確認
-        if index not in [0, 1] or (index == 1 and not self._dual_view):
-            log_print(ERROR, f"無効なインデックス: {index}")
-            return False
-        
-        try:
-            # ファイル名から拡張子を取得
-            _, ext = os.path.splitext(path.lower())
-            
-            # デバッグ出力を追加
-            log_print(DEBUG, f"ファイル拡張子: {ext}, サポートされている拡張子: {self.SUPPORTED_EXTENSIONS}")
-            
-            # 拡張子チェックを修正 - すべて小文字化して比較
-            supported_exts_lower = [e.lower() for e in self.SUPPORTED_EXTENSIONS]
-            if ext.lower() not in supported_exts_lower:
-                log_print(WARNING, f"サポートされていない画像形式です: {ext}")
-                self.statusbar.showMessage(f"サポートされていない画像形式です: {ext}")
-                return False
-            
-            # パスの解釈に基づいて適切なメソッドで画像データを取得
-            if use_browser_path:
-                # ブラウザから取得したパスの場合はextract_fileを使用
-                log_print(INFO, f"ブラウザパスから画像を読み込み中: {path}")
-                image_data = self.archive_manager.extract_file(path)
-            else:
-                # カレントディレクトリ相対パスの場合はextract_itemを使用
-                log_print(INFO, f"ディレクトリ相対パスから画像を読み込み中: {path}")
-                image_data = self.archive_manager.extract_item(path)
-            
-            if not image_data:
-                log_print(ERROR, f"画像データの読み込みに失敗しました: {path}")
-                self.statusbar.showMessage(f"画像データの読み込みに失敗しました: {path}")
-                return False
-            
-            # 画像処理モジュールを使用して画像を読み込み
-            pixmap, numpy_array, info = load_image_from_bytes(image_data, path)
-            
-            if pixmap is None:
-                log_print(ERROR, f"画像の表示に失敗しました: {path}")
-                self.statusbar.showMessage(f"画像の表示に失敗しました: {path}")
-                return False
-            
-            # 表示ハンドラに画像情報を設定
-            self.display_handler.set_image(pixmap, image_data, numpy_array, info, path, index)
-            
+        if success:
             # ウィンドウタイトルを更新（1画面目のみ）
             if index == 0:
                 self.setWindowTitle(f"画像プレビュー - {os.path.basename(path)}")
@@ -427,56 +395,73 @@ class ImagePreviewWindow(QMainWindow):
             # 画像情報をステータスバーに表示
             self._update_status_info()
             
-            success = True
-            
-            # 追加: 画像読み込み成功後、ブラウザが未初期化の場合は現在のパスを基準に初期化
-            if success and self.archive_manager and not self._browser:
+            # 画像読み込み成功後、ブラウザが未初期化の場合は現在のパスを基準に初期化
+            if self.archive_manager and not self._browser:
                 try:
                     supported_exts = get_supported_image_extensions()
                     # まずブラウザを初期化
                     self._browser = self.archive_manager.get_browser(
                         exts=supported_exts,
-                        pages=self._browser_pages,
-                        shift=self._browser_shift
+                        pages=self.image_model.get_browser_pages(),
+                        shift=self.image_model.is_browser_shift()
                     )
                     # 明示的にパスを指定してジャンプ
                     self._browser.jump(path)
                     log_print(INFO, f"アーカイブブラウザを初期化し、'{path}'へジャンプしました")
                 except Exception as e:
                     log_print(ERROR, f"アーカイブブラウザの初期化に失敗しました: {e}")
-            
-            return success
-            
-        except Exception as e:
-            log_print(ERROR, f"画像の読み込み中にエラーが発生しました: {e}")
-            self.statusbar.showMessage(f"エラー: {str(e)}")
-            return False
+        
+        return success
     
     def _update_status_info(self):
         """ステータスバーに画像情報を表示"""
-        status_msg = self.display_handler.get_status_info()
+        status_msg = self.image_model.get_status_info()
         if status_msg:
             self.statusbar.showMessage(status_msg)
     
     def fit_to_window(self):
         """画像をウィンドウに合わせる"""
+        # 画像モデルに表示モードを設定
+        if self.image_model:
+            self.image_model.set_display_mode(True)
+            self.image_model.set_zoom_factor(1.0)  # ズーム倍率も明示的にリセット
+        
+        # 表示ハンドラで実際の表示を更新
         result = self.display_handler.fit_to_window()
         
-        # コンテキストメニューの表示状態を更新
-        if result and hasattr(self, 'context_menu'):
-            self.context_menu.update_display_mode(True)
+        # メソッド実行結果を確認してステータスを更新
+        if result:
+            self.statusbar.showMessage("ウィンドウサイズに合わせました")
+            # コンテキストメニューの表示状態を更新
+            if hasattr(self, 'context_menu'):
+                self.context_menu.update_display_mode(True)
+        else:
+            self.statusbar.showMessage("表示モード更新失敗")
         
-        self.statusbar.showMessage("ウィンドウサイズに合わせました")
+        # デバッグログを追加
+        log_print(DEBUG, "fit_to_window メソッドを実行: 画像モデル更新")
+        return result
     
     def show_original_size(self):
         """原寸大で表示"""
+        # 画像モデルに表示モードを設定
+        if self.image_model:
+            self.image_model.set_display_mode(False)
+            self.image_model.set_zoom_factor(1.0)  # 原寸大は倍率1.0
+        
+        # 表示ハンドラで実際の表示を更新
         result = self.display_handler.show_original_size()
         
-        # コンテキストメニューの表示状態を更新
-        if result and hasattr(self, 'context_menu'):
-            self.context_menu.update_display_mode(False)
+        # メソッド実行結果を確認してステータスを更新
+        if result:
+            self.statusbar.showMessage("原寸大表示")
+            # コンテキストメニューの表示状態を更新
+            if hasattr(self, 'context_menu'):
+                self.context_menu.update_display_mode(False)
+        else:
+            self.statusbar.showMessage("表示モード更新失敗")
         
-        self.statusbar.showMessage("原寸大表示")
+        return result
     
     def rotate_left(self):
         """画像を左に90度回転"""
@@ -496,19 +481,24 @@ class ImagePreviewWindow(QMainWindow):
     
     def toggle_dual_view(self):
         """デュアルビューの切り替え"""
+        # 現在の状態を画像モデルから取得
+        dual_view = self.image_model.is_dual_view()
+        right_to_left = self.image_model.is_right_to_left()
+        browser_shift = self.image_model.is_browser_shift()
+        
         # デュアルモードとシングルモード間の切り替え
-        if self._dual_view:
+        if dual_view:
             # デュアルモードからシングルモードへ
             self.set_view_mode("single")
         else:
             # シングルモードからデュアルモードへ（左右設定を保持）
-            if self._browser_shift:
-                if self._right_to_left:
+            if browser_shift:
+                if right_to_left:
                     self.set_view_mode("dual_rl_shift")
                 else:
                     self.set_view_mode("dual_lr_shift")
             else:
-                if self._right_to_left:
+                if right_to_left:
                     self.set_view_mode("dual_rl")
                 else:
                     self.set_view_mode("dual_lr")
@@ -517,11 +507,16 @@ class ImagePreviewWindow(QMainWindow):
     
     def toggle_shift_mode(self):
         """シフトモードの切り替え"""
+        # 現在の状態を画像モデルから取得
+        dual_view = self.image_model.is_dual_view()
+        right_to_left = self.image_model.is_right_to_left()
+        browser_shift = self.image_model.is_browser_shift()
+        
         # シフトモードの切り替え（他の設定は保持）
-        if self._browser_shift:
+        if browser_shift:
             # シフトオンからオフへ
-            if self._dual_view:
-                if self._right_to_left:
+            if dual_view:
+                if right_to_left:
                     self.set_view_mode("dual_rl")
                 else:
                     self.set_view_mode("dual_lr")
@@ -529,8 +524,8 @@ class ImagePreviewWindow(QMainWindow):
                 self.set_view_mode("single")
         else:
             # シフトオフからオンへ
-            if self._dual_view:
-                if self._right_to_left:
+            if dual_view:
+                if right_to_left:
                     self.set_view_mode("dual_rl_shift")
                 else:
                     self.set_view_mode("dual_lr_shift")
@@ -552,222 +547,14 @@ class ImagePreviewWindow(QMainWindow):
                 - "dual_rl_shift": デュアルモード（右左シフト）
                 - "dual_lr_shift": デュアルモード（左右シフト）
         """
-        # 現在のモードを保存
-        old_dual_view = self._dual_view
-        old_right_to_left = self._right_to_left
-        old_browser_shift = self._browser_shift
-        
-        # モードに応じて設定を変更
-        if mode == "single":
-            # シングルモード
-            self._dual_view = False
-            self._browser_pages = 1
-            self._browser_shift = False
-            self._right_to_left = False
-        elif mode == "dual_rl":
-            # デュアルモード（右左）
-            self._dual_view = True
-            self._browser_pages = 2
-            self._browser_shift = False
-            self._right_to_left = True
-        elif mode == "dual_lr":
-            # デュアルモード（左右）
-            self._dual_view = True
-            self._browser_pages = 2
-            self._browser_shift = False
-            self._right_to_left = False
-        elif mode == "dual_rl_shift":
-            # デュアルモード（右左シフト）
-            self._dual_view = True
-            self._browser_pages = 2
-            self._browser_shift = True
-            self._right_to_left = True
-        elif mode == "dual_lr_shift":
-            # デュアルモード（左右シフト）
-            self._dual_view = True
-            self._browser_pages = 2
-            self._browser_shift = True
-            self._right_to_left = False
-        
-        log_print(DEBUG, f"表示モード変更: {mode}, dual_view={self._dual_view}, right_to_left={self._right_to_left}, shift={self._browser_shift}")
-        
-        # ブラウザの設定を更新
-        if self._browser:
-            try:
-                # ブラウザのプロパティを直接変更
-                self._browser._pages = self._browser_pages
-                self._browser._shift = self._browser_shift
-                
-                log_print(INFO, f"ブラウザ表示モードを変更: mode={mode}, pages={self._browser_pages}, shift={self._browser_shift}, rtl={self._right_to_left}")
-            except Exception as e:
-                log_print(ERROR, f"ブラウザの更新に失敗しました: {e}")
-        
-        # デュアルモードの切り替えが発生した場合、UIを再構築
-        if old_dual_view != self._dual_view:
-            # 画面を再構築する前に表示ハンドラの状態をリセット
-            if hasattr(self, 'display_handler'):
-                # 拡大率と表示モードを保存
-                saved_fit_mode = self.display_handler._fit_to_window_mode
-                saved_zoom = self.display_handler._zoom_factor
-                
-                self.display_handler.reset_state()
-                
-            # 既存のレイアウトをクリア
-            while self.main_layout.count():
-                item = self.main_layout.takeAt(0)
-                if item.widget():
-                    item.widget().setParent(None)
-            
-            # 画像エリアを再作成
-            self.image_areas = []
-            
-            if self._dual_view:
-                # デュアルビューの場合はスプリッターを使用
-                self.splitter = QSplitter(Qt.Horizontal)
-                # マージンを0に設定して画像を隙間なく表示
-                self.splitter.setContentsMargins(0, 0, 0, 0)
-                self.splitter.setOpaqueResize(False)  # リサイズ中も滑らかに表示
-                self.splitter.setHandleWidth(1)  # ハンドルをほぼ見えなくする
-                self.main_layout.addWidget(self.splitter)
-                
-                # 左右の画像エリアを作成
-                for i in range(2):
-                    scroll_area = ImageScrollArea()
-                    scroll_area.setFocusPolicy(Qt.StrongFocus)  # キーボードフォーカスを有効化
-                    from PySide6.QtWidgets import QFrame  # QFrameをインポート
-                    scroll_area.setFrameShape(QFrame.NoFrame)  # フレームを非表示に設定
-                    scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-                    scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-                    self.image_areas.append(scroll_area)
-                
-                # 重要: 右から左モードの場合はウィジェットの順序を逆にして追加
-                if self._right_to_left:
-                    # 右側を第一画面として追加
-                    self.splitter.addWidget(self.image_areas[1])  # 右側が先 (index=0)
-                    self.splitter.addWidget(self.image_areas[0])  # 左側が後 (index=1)
-                    log_print(DEBUG, "デュアルモード（右左）でスプリッター作成: 右側が第一画面")
-                else:
-                    # 左側を第一画面として追加
-                    self.splitter.addWidget(self.image_areas[0])  # 左側が先 (index=0)
-                    self.splitter.addWidget(self.image_areas[1])  # 右側が後 (index=1)
-                    log_print(DEBUG, "デュアルモード（左右）でスプリッター作成: 左側が第一画面")
-                
-                # スプリッターの位置を50:50に設定
-                self.splitter.setSizes([500, 500])
-                
-                # マウストラッキングを設定
-                self.splitter.setMouseTracking(True)
-                self.image_areas[0].setMouseTracking(True)
-                self.image_areas[1].setMouseTracking(True)
-            else:
-                # シングルビューの場合は単純にスクロールエリアを追加
-                scroll_area = ImageScrollArea()
-                scroll_area.setFocusPolicy(Qt.StrongFocus)  # キーボードフォーカスを有効化
-                self.image_areas.append(scroll_area)
-                self.main_layout.addWidget(scroll_area)
-                
-                # 2画面用に配列を2要素にする（未使用でも統一的に扱えるように）
-                self.image_areas.append(None)
-                
-                # マウストラッキングを設定
-                self.image_areas[0].setMouseTracking(True)
-            
-            # 表示ハンドラに新しい画像エリアを設定
-            self.display_handler.setup_image_areas(self.image_areas)
-            
-            # 保存した拡大率と表示モードを復元
-            if 'saved_fit_mode' in locals():
-                self.display_handler._fit_to_window_mode = saved_fit_mode
-            if 'saved_zoom' in locals():
-                self.display_handler._zoom_factor = saved_zoom
-            
-            # ナビゲーションバーの右左モードも更新
-            if hasattr(self, 'navigation_bar'):
-                self.navigation_bar.set_right_to_left_mode(self._right_to_left)
-                log_print(DEBUG, f"ナビゲーションバーの右左モードを更新（レイアウト再構築時）: {self._right_to_left}")
-            
-            # 保存しておいた画像データを復元
-            if self._browser:
-                # 明示的にブラウザを更新して現在の設定を反映
-                try:
-                    # ブラウザを再初期化
-                    self._browser._pages = self._browser_pages
-                    self._browser._shift = self._browser_shift
-                    # 画像を再取得
-                    self._update_images_from_browser()
-                except Exception as e:
-                    log_print(ERROR, f"ブラウザの更新に失敗しました: {e}")
-                    import traceback
-                    log_print(ERROR, traceback.format_exc())
-        else:
-            # 左右反転設定の反映（デュアルモード時のみ - 右左モードの変更だけ）
-            if self._dual_view and len(self.image_areas) >= 2 and self.image_areas[1] and (old_right_to_left != self._right_to_left):
-                log_print(DEBUG, f"左右反転設定を変更: old={old_right_to_left}, new={self._right_to_left}")
+        # DisplayHandlerに処理を委譲
+        return self.display_handler.set_view_mode(mode, self)
 
-                # 画面を再構築する前に表示ハンドラの状態をリセット
-                if hasattr(self, 'display_handler'):
-                    # 拡大率と表示モードを保存
-                    saved_fit_mode = self.display_handler._fit_to_window_mode
-                    saved_zoom = self.display_handler._zoom_factor
-                    
-                    # 最小限のリセットで画像データは保持
-                    for area in self.image_areas:
-                        if area:
-                            # 位置設定と画像配置だけリセット
-                            area.image_label.setAlignment(Qt.AlignCenter)
-                
-                # スプリッター内のウィジェットを入れ替える
-                if hasattr(self, 'splitter'):
-                    # 両方のウィジェットを一旦取り外す
-                    self.image_areas[0].setParent(None)
-                    self.image_areas[1].setParent(None)
-                    
-                    
-                    # RTLモードに応じて適切な順序で追加し直す
-                    if self._right_to_left:
-                        # 右から左モード: 右側が第一画面
-                        self.splitter.addWidget(self.image_areas[1])  # 右側が先 (index=0)
-                        self.splitter.addWidget(self.image_areas[0])  # 左側が後 (index=1)
-                        log_print(DEBUG, "デュアルモード（右左）でスプリッター再構成: 右側が第一画面")
-                    else:
-                        # 左から右モード: 左側が第一画面
-                        self.splitter.addWidget(self.image_areas[0])  # 左側が先 (index=0)
-                        self.splitter.addWidget(self.image_areas[1])  # 右側が後 (index=1)
-                        log_print(DEBUG, "デュアルモード（左右）でスプリッター再構成: 左側が第一画面")
-                    
-                    # スプリッターの位置を50:50に設定
-                    self.splitter.setSizes([500, 500])
-                    
-                    # ナビゲーションバーの右左モードも更新
-                    if hasattr(self, 'navigation_bar'):
-                        self.navigation_bar.set_right_to_left_mode(self._right_to_left)
-                        log_print(DEBUG, f"ナビゲーションバーの右左モードを更新: {self._right_to_left}")
-                    
-                    # 表示ハンドラに再設定
-                    self.display_handler.setup_image_areas(self.image_areas)
-                    
-                    # 保存した拡大率と表示モードを復元
-                    if 'saved_fit_mode' in locals():
-                        self.display_handler._fit_to_window_mode = saved_fit_mode
-                    if 'saved_zoom' in locals():
-                        self.display_handler._zoom_factor = saved_zoom
-                    
-                    # 画像を再読み込みして正しい順序で表示
-                    self._update_images_from_browser()
-                
-            # シフトモードの変更のみの場合
-            elif old_browser_shift != self._browser_shift:
-                log_print(DEBUG, f"シフトモード変更: old={old_browser_shift}, new={self._browser_shift}")
-                # ブラウザから画像を再取得して表示を更新
-                if self._browser:
-                    self._update_images_from_browser()
-        
-        # コンテキストメニューの表示状態を更新
-        if hasattr(self, 'context_menu'):
-            self.context_menu.update_view_mode(mode)
-        
-        self.statusbar.showMessage(f"表示モード: {mode}")
-    
+    def _refresh_display_mode(self, fit_to_window: bool = True):
+        """現在の表示モードを再適用して表示を更新する"""
+        # DisplayHandlerに処理を委譲
+        self.display_handler.refresh_display_mode(fit_to_window)
+
     def show_image_info(self):
         """画像の詳細情報を表示する"""
         has_info = False
@@ -781,7 +568,7 @@ class ImagePreviewWindow(QMainWindow):
         
         # 右側画像の情報（デュアルビューの場合）
         right_info = self.display_handler.get_image_info(1)
-        if self._dual_view and right_info:
+        if self.image_model.is_dual_view() and right_info:
             has_info = True
             if info_text:
                 info_text += "\n\n"
@@ -951,8 +738,6 @@ class ImagePreviewWindow(QMainWindow):
             self.statusbar.showMessage("ウィンドウモードに戻りました")
         else:
             self.showFullScreen()
-            self.statusbar.showMessage("フルスクリーンモードに切り替えました")
-        
             self.statusbar.showMessage("フルスクリーンモードに切り替えました")
         
         # フルスクリーン切り替え後にナビゲーションバーの位置を再調整

@@ -334,6 +334,23 @@ class SuperResolutionSettingsDialog(QDialog):
         self.auto_process_check.setChecked(self.auto_process)
         
         # RealESRGAN設定の初期値
+        variant = self.options.get('variant', 'denoise')
+        denoise_strength = self.options.get('denoise_strength', 0.5)
+        face_enhance = self.options.get('face_enhance', False)
+        
+        # バリアントの初期値を設定
+        for i in range(self.variant_combo.count()):
+            if self.variant_combo.itemText(i) == variant:
+                self.variant_combo.setCurrentIndex(i)
+                break
+        
+        # デノイズ強度の初期値を設定
+        self.denoise_slider.setValue(int(denoise_strength * 100))
+        
+        # 顔強調の初期値を設定
+        self.face_enhance_check.setChecked(face_enhance)
+        
+        # RealESRGAN設定の初期値
         realesrgan_options = self.options.get('realesrgan', {})
         
         # モデルタイプ

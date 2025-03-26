@@ -162,21 +162,28 @@ class EventHandler:
         Returns:
             bool: イベントを処理した場合はTrue
         """
+        # 親ウィンドウのイメージモデルが存在し、ウィンドウ合わせモードの時だけ画像移動を行う
+        # 原寸大表示モード(fit_to_window=False)のときはスクロール操作を優先
+        if hasattr(self.parent, 'image_model') and self.parent.image_model:
+            # fit_to_windowモードでない場合は画像スクロールを優先
+            if not self.parent.image_model.is_fit_to_window():
+                log_print(DEBUG, "原寸大表示モードでホイール操作: スクロール操作を優先")
+                return False
+                
         # ホイールの回転方向を取得
         delta = event.angleDelta().y()
         
-        # 右から左モードの場合は左右の動作を反転
-        is_rtl_mode = hasattr(self.parent, '_right_to_left') and self.parent._right_to_left
-        
-        # 通常モード: 上スクロール = 前の画像、下スクロール = 次の画像
-        # RTLモード: 上スクロール = 次の画像、下スクロール = 前の画像
+        # 視覚的一貫性を保持: 上スクロールは常に前の画像、下スクロールは常に次の画像
+        # RTLモードでも反転させない（視覚的な一貫性を優先）
         if delta > 0:  # 上方向スクロール
-            action = 'prev_image' if not is_rtl_mode else 'next_image'
+            action = 'prev_image'
             if action in self.callbacks:
+                log_print(DEBUG, f"ホイール上スクロールで画像移動: {action}")
                 return self.callbacks[action]()
         elif delta < 0:  # 下方向スクロール
-            action = 'next_image' if not is_rtl_mode else 'prev_image'
+            action = 'next_image'
             if action in self.callbacks:
+                log_print(DEBUG, f"ホイール下スクロールで画像移動: {action}")
                 return self.callbacks[action]()
                 
         # イベント処理なし

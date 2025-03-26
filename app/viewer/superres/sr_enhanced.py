@@ -11,6 +11,7 @@ import threading
 import queue
 from typing import Dict, Any, Optional, List, Union, Tuple, Callable
 from enum import Enum
+from logutils import log_print, DEBUG, INFO, WARNING, ERROR
 
 import cv2
 import numpy as np
@@ -110,9 +111,7 @@ class EnhancedSRManager(SuperResolutionManager):
             try:
                 self._progress_callback(message)
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"進捗コールバック呼び出し中にエラー: {e}")
+                log_print(ERROR, f"進捗通知中にエラー: {str(e)}")
 
     def _notify_completion(self, success: bool):
         """完了を通知"""
@@ -121,9 +120,7 @@ class EnhancedSRManager(SuperResolutionManager):
             try:
                 self._completion_callback(success)
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"完了コールバック呼び出し中にエラー: {e}")
+                log_print(ERROR, f"完了通知中にエラー: {str(e)}")
 
     def _notify_settings_changed(self, settings: Dict[str, Any]):
         """設定変更を通知"""
@@ -132,9 +129,7 @@ class EnhancedSRManager(SuperResolutionManager):
             try:
                 self._settings_callback(settings)
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"設定変更コールバック呼び出し中にエラー: {e}")
+                log_print(ERROR, f"設定変更通知中にエラー: {str(e)}")
 
     def update_settings_with_callback(self, settings: Dict[str, Any], callback=None):
         """
@@ -162,6 +157,12 @@ class EnhancedSRManager(SuperResolutionManager):
                     import traceback
                     traceback.print_exc()
                     print(f"設定更新コールバック呼び出し中にエラー: {e}")
+        
+        # 完了コールバックを設定
+        self._settings_callback = on_complete
+        
+        # 設定を更新
+        return self.update_settings(settings)
         
         # 完了コールバックを設定
         self._settings_callback = on_complete

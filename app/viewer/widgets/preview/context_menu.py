@@ -7,7 +7,7 @@ ImagePreviewWindowで使用するコンテキストメニューを提供しま�
 from PySide6.QtWidgets import QMenu
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup  # QActionGroupをQtGuiからインポート
-from logutils import log_print, INFO, ERROR
+from logutils import log_print, DEBUG, INFO, WARNING, ERROR
 
 
 class PreviewContextMenu(QMenu):
@@ -127,6 +127,16 @@ class PreviewContextMenu(QMenu):
             self.parent.fit_to_window()
             self.fit_to_window_action.setChecked(True)
             self.original_size_action.setChecked(False)
+            
+            # 重複した画像調整を防ぐため、確認処理のみ実行
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, self._verify_display_mode)
+    
+    def _verify_display_mode(self):
+        """表示モードが正しく適用されているか確認"""
+        # 表示が更新されたことをログに出力
+        from logutils import log_print, DEBUG
+        log_print(DEBUG, "コンテキストメニューからの表示モード変更確認完了")
     
     def _on_original_size(self):
         """原寸大表示処理"""
@@ -134,6 +144,10 @@ class PreviewContextMenu(QMenu):
             self.parent.show_original_size()
             self.fit_to_window_action.setChecked(False)
             self.original_size_action.setChecked(True)
+            
+            # 重複した画像調整を防ぐため、確認処理のみ実行
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, self._verify_display_mode)
     
     def _on_set_view_mode(self, mode: str):
         """
@@ -148,7 +162,29 @@ class PreviewContextMenu(QMenu):
                 - "dual_lr_shift": デュアルモード（左右シフト）
         """
         if hasattr(self.parent, 'set_view_mode'):
+            # モードを設定
             self.parent.set_view_mode(mode)
+            
+            # コンテキストメニューのチェック状態を更新
+            self.update_view_mode(mode)
+            
+            # 処理後、少し遅延させて画像の読み込みと表示を確実にする
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(200, lambda: self._ensure_display_updated(mode))
+    
+    def _ensure_display_updated(self, mode: str):
+        """表示モード変更後に確実に画面が更新されるようにする"""
+        if hasattr(self.parent, '_update_images_from_browser'):
+            # ブラウザから画像を再取得して表示を更新
+            self.parent._update_images_from_browser()
+            
+            # デュアルモードの場合は明示的にフィット表示を呼び出す
+            if mode.startswith("dual_") and hasattr(self.parent, 'fit_to_window'):
+                self.parent.fit_to_window()
+                
+        # ログ出力
+        from logutils import log_print, DEBUG
+        log_print(DEBUG, f"コンテキストメニューから表示モード変更後の画面更新を実行: {mode}")
     
     def _on_rotate_left(self):
         """左回転処理"""
@@ -199,5 +235,9 @@ class PreviewContextMenu(QMenu):
         Args:
             fit_to_window: ウィンドウに合わせるモードがONの場合はTrue
         """
+        # メニューアクションのチェック状態を現在のモードに合わせて更新
         self.fit_to_window_action.setChecked(fit_to_window)
         self.original_size_action.setChecked(not fit_to_window)
+        
+        # デバッグログでチェック状態を確認
+        log_print(DEBUG, f"コンテキストメニューの表示モード更新: fit_to_window={fit_to_window}")
