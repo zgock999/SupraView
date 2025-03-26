@@ -216,6 +216,25 @@ class ThumbnailGenerator:
             thumbnail_size: サムネイルのサイズ
             current_directory: 現在表示中のディレクトリパス（相対パス）
         """
+        # 引数の検証とデバッグ情報（追加）
+        if not archive_manager:
+            log_print(ERROR, "archive_managerがNoneです。サムネイル生成を中止します。")
+            if on_all_completed:
+                on_all_completed()
+            return
+            
+        if not hasattr(archive_manager, 'extract_item'):
+            log_print(ERROR, "archive_managerにextract_itemメソッドがありません。サムネイル生成を中止します。")
+            if on_all_completed:
+                on_all_completed()
+            return
+            
+        if not file_items:
+            log_print(WARNING, "file_itemsが空です。サムネイル生成を中止します。")
+            if on_all_completed:
+                on_all_completed()
+            return
+            
         # キャンセル中の場合はすぐに完了とする（追加）
         if self._is_cancelling:
             if on_all_completed:
@@ -236,6 +255,7 @@ class ThumbnailGenerator:
         
         if not image_files:
             # 画像ファイルがない場合は完了を通知して終了
+            log_print(INFO, "サムネイル生成対象の画像ファイルがありません。")
             if on_all_completed:
                 on_all_completed()
             return
@@ -243,80 +263,90 @@ class ThumbnailGenerator:
         # 常にデバッグ情報を出力（debug_modeに関わらず）
         log_print(INFO, f"サムネイル生成開始: {len(image_files)}ファイル、現在ディレクトリ: '{current_directory}'")
         
-        # シーケンシャルエクストラクタを作成
-        extractor = SequentialExtractor(
-            archive_manager=archive_manager,
-            file_paths=image_files,
-            current_directory=current_directory
-        )
-        extractor.debug_mode = self.debug_mode
-        
-        # ファイル抽出完了時のコールバック
-        def on_file_extracted(filename, file_data):
-            # デバッグ出力を強化
-            log_print(INFO, f"ファイル '{filename}' の抽出完了（{len(file_data)}バイト）、サムネイル生成を開始")
-            
-            # キャンセル中の場合は処理しない（追加）
-            if self._is_cancelling:
-                return
-            
-            # 抽出後にコンテキストが変更されていないかチェック（重要な改善）
-            if current_directory != self._context_current_directory:
-                log_print(WARNING, f"ディレクトリが変更されたためサムネイル生成をスキップします: {filename}")
-                return
-            
-            # ワーカータスクに明示的にファイル名をキーワード引数として渡す
-            # context_directory は渡さず、ラムダ関数で _handle_thumbnail_result に渡す
-            task_id = self.worker_manager.start_task(
-                self._generate_thumbnail_from_data,
-                file_data=file_data,
-                thumbnail_size=thumbnail_size,
-                # 重要: filenameは引数ではなくキーワード引数としてワーカーに保存
-                filename=filename,
-                # コールバックを渡す - context_directoryはここで利用
-                on_result=lambda task_id, result: self._handle_thumbnail_result(task_id, result, on_thumbnail_ready, filename, current_directory),
-                on_error=lambda task_id, error_info: log_print(ERROR, f"サムネイル生成エラー ({filename}): {error_info[1]}")
+        try:
+            # シーケンシャルエクストラクタを作成
+            extractor = SequentialExtractor(
+                archive_manager=archive_manager,
+                file_paths=image_files,
+                current_directory=current_directory
             )
-            log_print(INFO, f"サムネイル生成タスク開始: {task_id} - {filename}")
-        
-        # すべてのファイル抽出完了時のコールバック
-        def on_extraction_completed(task_id, result):
-            log_print(INFO, f"すべてのファイル抽出が完了しました。結果: {len(result) if isinstance(result, dict) else 'N/A'}")
+            extractor.debug_mode = self.debug_mode
             
-            # 抽出タスクIDを初期化
-            self.extraction_task_id = None
+            # ファイル抽出完了時のコールバック
+            def on_file_extracted(filename, file_data):
+                # デバッグ出力を強化
+                log_print(INFO, f"ファイル '{filename}' の抽出完了（{len(file_data)}バイト）、サムネイル生成を開始")
+                
+                # キャンセル中の場合は処理しない（追加）
+                if self._is_cancelling:
+                    return
+                
+                # 抽出後にコンテキストが変更されていないかチェック（重要な改善）
+                if current_directory != self._context_current_directory:
+                    log_print(WARNING, f"ディレクトリが変更されたためサムネイル生成をスキップします: {filename}")
+                    return
+                
+                # ワーカータスクに明示的にファイル名をキーワード引数として渡す
+                # context_directory は渡さず、ラムダ関数で _handle_thumbnail_result に渡す
+                task_id = self.worker_manager.start_task(
+                    self._generate_thumbnail_from_data,
+                    file_data=file_data,
+                    thumbnail_size=thumbnail_size,
+                    # 重要: filenameは引数ではなくキーワード引数としてワーカーに保存
+                    filename=filename,
+                    # コールバックを渡す - context_directoryはここで利用
+                    on_result=lambda task_id, result: self._handle_thumbnail_result(task_id, result, on_thumbnail_ready, filename, current_directory),
+                    on_error=lambda task_id, error_info: log_print(ERROR, f"サムネイル生成エラー ({filename}): {error_info[1]}")
+                )
+                log_print(INFO, f"サムネイル生成タスク開始: {task_id} - {filename}")
             
-            # 全処理完了時のコールバックを呼び出し
-            if on_all_completed:
-                # アクティブなサムネイル生成タスクがなければ完了を通知
-                active_tasks = self.worker_manager.active_task_count()
-                log_print(INFO, f"残りのアクティブタスク数: {active_tasks}")
-                if active_tasks == 0:
+            # すべてのファイル抽出完了時のコールバック
+            def on_extraction_completed(task_id, result):
+                log_print(INFO, f"すべてのファイル抽出が完了しました。結果: {len(result) if isinstance(result, dict) else 'N/A'}")
+                
+                # 抽出タスクIDを初期化
+                self.extraction_task_id = None
+                
+                # 全処理完了時のコールバックを呼び出し
+                if on_all_completed:
+                    # アクティブなサムネイル生成タスクがなければ完了を通知
+                    active_tasks = self.worker_manager.active_task_count()
+                    log_print(INFO, f"残りのアクティブタスク数: {active_tasks}")
+                    if active_tasks == 0:
+                        on_all_completed()
+            
+            # 抽出エラー時のコールバック
+            def on_extraction_error(task_id, error_info):
+                log_print(ERROR, f"ファイル抽出エラー: {error_info[1]}")
+                self.extraction_task_id = None  # タスクIDをクリア
+                
+                # キャンセルされた場合でも完了コールバックを呼び出す（追加）
+                if self._is_cancelling and on_all_completed:
                     on_all_completed()
-        
-        # 抽出エラー時のコールバック
-        def on_extraction_error(task_id, error_info):
-            log_print(ERROR, f"ファイル抽出エラー: {error_info[1]}")
-            self.extraction_task_id = None  # タスクIDをクリア
             
-            # キャンセルされた場合でも完了コールバックを呼び出す（追加）
-            if self._is_cancelling and on_all_completed:
+            # キャンセル確認関数を追加
+            def is_extraction_cancelled():
+                return self._is_cancelling
+            
+            # ファイル抽出タスクを開始
+            self.extraction_task_id = self.worker_manager.start_task(
+                extractor.extract_files,
+                on_file_extracted=on_file_extracted,
+                on_result=on_extraction_completed,
+                on_error=on_extraction_error,
+                is_cancelled=is_extraction_cancelled  # キャンセル確認関数を追加
+            )
+            
+            log_print(INFO, f"ファイル抽出タスク開始: {self.extraction_task_id}")
+        
+        except Exception as e:
+            log_print(ERROR, f"サムネイル生成の準備中にエラーが発生しました: {e}")
+            import traceback
+            log_print(ERROR, traceback.format_exc())
+            
+            # エラーが発生した場合でも完了コールバックを呼び出す
+            if on_all_completed:
                 on_all_completed()
-        
-        # キャンセル確認関数を追加
-        def is_extraction_cancelled():
-            return self._is_cancelling
-        
-        # ファイル抽出タスクを開始
-        self.extraction_task_id = self.worker_manager.start_task(
-            extractor.extract_files,
-            on_file_extracted=on_file_extracted,
-            on_result=on_extraction_completed,
-            on_error=on_extraction_error,
-            is_cancelled=is_extraction_cancelled  # キャンセル確認関数を追加
-        )
-        
-        log_print(INFO, f"ファイル抽出タスク開始: {self.extraction_task_id}")
     
     def _generate_thumbnail_from_data(
         self,

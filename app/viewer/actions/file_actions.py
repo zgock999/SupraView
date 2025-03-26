@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 # ロギングユーティリティをインポート
 from logutils import log_print, log_trace, DEBUG, INFO, WARNING, ERROR, CRITICAL
 from arc.path_utils import normalize_path
-from arc.arc import EntryType
+from arc.arc import EntryInfo, EntryType
 
 try:
     from PySide6.QtWidgets import QMessageBox, QWidget, QApplication
@@ -242,13 +242,12 @@ class FileActionHandler(ViewerDebugMixin):
                 traceback.print_exc()
             return False
     
-    def handle_item_activated(self, name: str, is_dir: bool) -> bool:
+    def handle_entry_activated(self, entry: EntryInfo) -> bool:
         """
-        アイテムがアクティブになった（ダブルクリックまたはシングルクリック）ときの処理
+        EntryInfoオブジェクトのアクティベート時の処理
         
         Args:
-            name: アイテム名（カレントディレクトリからの相対名）
-            is_dir: ディレクトリかどうか
+            entry: アクティベートされたエントリ情報
             
         Returns:
             bool: 処理に成功したかどうか
@@ -256,36 +255,44 @@ class FileActionHandler(ViewerDebugMixin):
         # サムネイル生成スレッドを確実に停止させる
         self._wait_for_thumbnail_threads()
         
-        if is_dir:
+        if entry.type == EntryType.DIRECTORY or entry.type == EntryType.ARCHIVE:
             # ディレクトリの場合は移動
             try:
                 # ステータスメッセージを更新（読み込み中）
-                loading_message = f"'{name}' に移動しています..."
+                loading_message = f"'{entry.name}' に移動しています..."
                 self._update_status(loading_message)
                 
                 # UIの更新を待つためにイベントループを処理
                 QApplication.processEvents()
                 
-                if name == "..":
-                    self.debug_info("親ディレクトリに移動")
-                    success = self.archive_manager.change_directory("..")
-                else:
-                    self.debug_info(f"ディレクトリに移動: '{name}'")
-                    # change_directoryからnavigate_to_itemに変更
-                    success = self.archive_manager.navigate_to_item(name)
+                # 相対パスを取得（エントリーが持っている場合はそれを使用）
+                rel_path = entry.rel_path
+                
+                # 現在のパスと異なる場合のみディレクトリ変更を実行
+                current_dir = self.archive_manager.current_directory
+                target_dir = rel_path.rstrip('/')
+                
+                # デバッグログ
+                self.debug_info(f"ディレクトリ移動: current='{current_dir}', target='{target_dir}'")
+                
+                if current_dir != target_dir or target_dir == "":  # 空文字はルートを表すので常に処理
+                    self.debug_info(f"ディレクトリに移動: '{rel_path}'")
+                    success = self.archive_manager.change_directory(rel_path)
                     
-                if not success:
-                    self._show_error("ディレクトリエラー", f"ディレクトリに移動できませんでした: {name}")
-                    return False
-                
-                # 現在のディレクトリの内容を読み込む
-                self._load_current_directory()
-                
-                # パス変更を通知
-                if self.on_path_changed:
-                    rel_path = self.archive_manager.current_directory
-                    display_path = self.archive_manager.get_full_path()
-                    self.on_path_changed(display_path, rel_path)
+                    if not success:
+                        self._show_error("ディレクトリエラー", f"ディレクトリに移動できませんでした: {entry.path}")
+                        return False
+                    
+                    # 現在のディレクトリの内容を読み込む
+                    self._load_current_directory()
+                    
+                    # パス変更を通知
+                    if self.on_path_changed:
+                        rel_path = self.archive_manager.current_directory
+                        display_path = self.archive_manager.get_full_path()
+                        self.on_path_changed(display_path, rel_path)
+                else:
+                    self.debug_info("同じディレクトリなので移動をスキップします")
                 
                 return True
                 
@@ -294,9 +301,14 @@ class FileActionHandler(ViewerDebugMixin):
                 if self.debug_mode:
                     traceback.print_exc()
                 return False
+        
         else:
             # ファイルの場合のアクション
             try:
+                # ファイル名とパスを取得
+                name = entry.name
+                path = entry.rel_path if hasattr(entry, 'rel_path') and entry.rel_path else entry.path
+                
                 # ステータスメッセージを更新
                 self.on_status_message(f"ファイル '{name}' を読み込んでいます...")
                 
@@ -312,26 +324,14 @@ class FileActionHandler(ViewerDebugMixin):
                 
                 # 画像ファイルの場合はプレビューウィンドウを表示
                 if ext in self.supported_image_extensions:
-                    self.debug_info(f"画像ファイルを開きます: {name}")
-                    
-                    # ベースパス相対のパスを正規化して取得
-                    # カレントディレクトリからのパスを構築
-                    if self.archive_manager.current_directory:
-                        # 空でないカレントディレクトリの場合は結合して正規化
-                        rel_path = normalize_path(os.path.join(self.archive_manager.current_directory, name))
-                    else:
-                        # ルートディレクトリの場合はそのまま（ただし正規化）
-                        rel_path = normalize_path(name)
-                    
-                    # 正しいベースパス相対のパスを使用（正規化済み）
-                    self.debug_info(f"プレビューウィンドウを開きます（正規化済みパス）: {rel_path}")
+                    self.debug_info(f"画像ファイルを開きます: {path}")
                     
                     try:
                         from app.viewer.widgets.preview.window import ImagePreviewWindow
                         
                         preview_window = ImagePreviewWindow(
                             archive_manager=self.archive_manager,
-                            initial_path=rel_path  # 正規化されたベースパス相対
+                            initial_path=path  # エントリの相対パスを使用
                         )
                         preview_window.show()
                         
@@ -347,8 +347,8 @@ class FileActionHandler(ViewerDebugMixin):
                         return False
                 else:
                     # その他のファイルはhexdumpビューアを表示
-                    self.debug_info(f"バイナリファイルを開きます: {name}")
-                    return self._open_hexdump_viewer(name)
+                    self.debug_info(f"バイナリファイルを開きます: {path}")
+                    return self._open_hexdump_viewer(path)
                 
             except Exception as e:
                 self._show_error("ファイルエラー", f"ファイルの処理中にエラーが発生しました:\n{str(e)}")
@@ -356,7 +356,10 @@ class FileActionHandler(ViewerDebugMixin):
                     import traceback
                     traceback.print_exc()
                 return False
+            
+            return True
     
+  
     def _open_image_preview(self, path: str) -> bool:
         """
         画像プレビューウィンドウを開く
@@ -375,20 +378,9 @@ class FileActionHandler(ViewerDebugMixin):
             self.debug_info(f"画像ファイルを読み込みます: {path}")
             
             # プレビューウィンドウを作成
-            preview_window = ImagePreviewWindow(parent=self.parent_widget, archive_manager=self.archive_manager)
+            preview_window = ImagePreviewWindow(parent=self.parent_widget, archive_manager=self.archive_manager,initial_path=path)
             preview_window.setWindowTitle(f"画像プレビュー - {os.path.basename(path)}")
-            
-            # 画像データを読み込み - extract_file から extract_item に変更
-            success = preview_window.load_image_from_path(path)
-            
-            if success:
-                # ウィンドウを表示
-                preview_window.show()
-                self._update_status(f"画像をプレビュー中: {os.path.basename(path)}")
-                return True
-            else:
-                self._update_status(f"画像の読み込みに失敗しました: {path}")
-                return False
+            preview_window.show()
                 
         except Exception as e:
             self._show_error("画像プレビュー表示中にエラーが発生しました", str(e))
@@ -409,7 +401,7 @@ class FileActionHandler(ViewerDebugMixin):
         """
         try:
             # ファイルの内容を読み込む - extract_file から extract_item に変更
-            file_data = self.archive_manager.extract_item(path)
+            file_data = self.archive_manager.extract_file(path)
             if file_data is None:
                 self._show_error("ファイル読み込みエラー", f"ファイル '{path}' を読み込めませんでした")
                 return False
@@ -449,8 +441,27 @@ class FileActionHandler(ViewerDebugMixin):
             # アーカイブマネージャーから現在のディレクトリの内容を取得
             items = self.archive_manager.list_items()
             
+            # 各アイテムにベースパス相対のパスを追加
+            current_dir = self.archive_manager.current_directory
+            for item in items:
+                name = item.get('name', '')
+                # カレントディレクトリ相対のパスをベースパス相対に変換
+                if current_dir:
+                    # 親ディレクトリ(..)は例外処理
+                    if name == '..':
+                        # 親ディレクトリのパスを生成
+                        parent_path = os.path.dirname(current_dir)
+                        item['path'] = parent_path
+                    else:
+                        # 通常のアイテムはカレントディレクトリと結合
+                        item['path'] = os.path.join(current_dir, name).replace('\\', '/')
+                else:
+                    # ルートディレクトリの場合は名前がそのままパス
+                    item['path'] = name
+            
             # 結果をコールバックで通知
             if self.on_directory_loaded:
+                # FileListViewはitemsリストを直接受け取る
                 self.on_directory_loaded(items)
             
             # ステータスメッセージ更新
@@ -484,7 +495,7 @@ class FileActionHandler(ViewerDebugMixin):
                 # ファイルの判定はマネージャから取得した情報で行う（os.path.isfile使用しない）
                 entry_type = archive_info.get('type', '')
                 
-                if entry_type == EntryType.ARCHIVE.name or entry_type == EntryType.FILE.name:
+                if (entry_type == EntryType.ARCHIVE.name or entry_type == EntryType.FILE.name):
                     size_str = f"{archive_info.get('size', 0):,} バイト"
                     entries_str = f"{archive_info.get('entries', 0)} エントリ"
                     status_message = f"アーカイブを開きました: {os.path.basename(path)} ({size_str}, {entries_str})"

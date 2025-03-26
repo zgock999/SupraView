@@ -178,7 +178,7 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
             self.debug_info(f"ディレクトリ変更: '{path}'")
             
             # 特殊なパス処理は維持（基本的なナビゲーション機能）
-            if path == "." or path == "":
+            if path == ".":
                 # 現在のディレクトリのまま
                 return True
             elif path == "..":
@@ -190,8 +190,9 @@ class ArchiveManagerWrapper(ViewerDebugMixin):
                     return True
                 else:
                     # 最後の/までを削除して親ディレクトリに移動
-                    if '/' in self._current_directory:
-                        parent_dir = self._current_directory.rsplit('/', 1)[0]
+                    current = self._current_directory.rstrip('/')
+                    if '/' in current:
+                        parent_dir = current.rsplit('/', 1)[0]
                         # 空文字列の場合はルートを表す
                         self._current_directory = parent_dir if parent_dir != "" else ""
                         self.debug_info(f"親ディレクトリに移動: '{self._current_directory}'")

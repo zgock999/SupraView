@@ -40,6 +40,7 @@ class FileListView(QListView):
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)  # 複数選択可能
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)  # 編集不可
         self.setDragEnabled(False)  # ドラッグ無効
+        self.setFlow(QListView.LeftToRight)  # エクスプローラー準拠の左から右へのフロー（横並び・縦スクロール）
         
         # モデルの設定
         self.file_model = FileListModel(self)

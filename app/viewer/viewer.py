@@ -342,6 +342,28 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
     
     def _open_file_dialog(self):
         """ファイル選択ダイアログを開く"""
+        # 書庫を開くダイアログを使用する
+        self.context_menu._on_open_archive()
+    
+    def _toggle_debug_mode(self, checked: bool):
+        """デバッグモードの切り替え"""
+        self.file_action_handler.debug_mode = checked
+        if checked:
+            # デバッグモード有効時はDEBUGレベルに設定（INFOからDEBUGに変更）
+            setup_logging(DEBUG)
+            self.statusBar().showMessage("デバッグモードを有効化しました")
+            self.debug_info("デバッグモードを有効化しました")
+        else:
+            # デバッグモード無効時はERRORレベルに設定
+            setup_logging(ERROR)
+            self.statusBar().showMessage("デバッグモードを無効化しました")
+            self.debug_info("デバッグモードを無効化しました")
+    
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """ドラッグエンターイベント処理"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+    
     def dropEvent(self, event: QDropEvent):
         """ドロップイベント処理"""
         urls = event.mimeData().urls()
@@ -371,10 +393,10 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
         パスナビゲーションからのパス変更ハンドラ
         
         Args:
-            path (str): 新しいパス
+            path: ナビゲーションバーから指定されたパス
         """
-        self.debug_info(f"ナビゲーションバーからのパス変更: {path}")
-        self._handle_open_path(path)
+        self.debug_info(f"パスナビゲーション: パス '{path}'")
+        self.file_action_handler.navigate_to(path)
     
     def _handle_navigate_to_folder(self, path: str):
         """
@@ -384,9 +406,7 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
             path: 移動先のフォルダパス
         """
         self.debug_info(f"フォルダメニューからのナビゲーション: '{path}'")
-        # 空の文字列や "/" はルートを意味する
-        if path == "/" or not path:
-            path = ""
+        # ファイルアクションハンドラを通じてナビゲーション
         self.file_action_handler.navigate_to(path)
     
     def _handle_item_activated(self, entry: EntryInfo):
@@ -397,32 +417,38 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
             entry (EntryInfo): アクティベートされたエントリ情報
         """
         self.debug_info(f"アイテムがアクティベートされました: {entry.path}")
-        if entry.entry_type == EntryType.DIRECTORY:
-            self._handle_open_path(entry.path)
-        else:
-            self.file_action_handler.open_file(entry.path)
+        
+        # EntryInfoオブジェクトをそのままFileActionHandlerに渡す
+        self.file_action_handler.handle_entry_activated(entry)
     
-    def _handle_directory_loaded(self, path: str, entries: List[EntryInfo]):
+    def _handle_directory_loaded(self, items: List[Dict[str, Any]]):
         """
         ディレクトリ読み込み完了ハンドラ
         
         Args:
-            path (str): 読み込まれたディレクトリのパス
-            entries (List[EntryInfo]): ディレクトリ内のエントリリスト
+            items: ディレクトリ内のアイテムリスト
         """
-        self.debug_info(f"ディレクトリが読み込まれました: {path}")
-        self.file_view.set_entries(entries)
-        self.path_nav.set_path(path)
+        self.debug_info(f"ディレクトリが読み込まれました: {len(items)}アイテム")
+        # FileListViewにアイテムリストを設定
+        self.file_view.set_items(items)
+        
+        # 表示用とナビゲーション用のパスを取得
+        display_path = self.archive_manager.get_full_path()
+        rel_path = self.archive_manager.current_directory
+        
+        # パスナビゲーションバーに設定
+        self.path_nav.set_path(display_path, rel_path)
     
-    def _handle_path_changed(self, path: str):
+    def _handle_path_changed(self, display_path: str, rel_path: str):
         """
         パス変更ハンドラ
         
         Args:
-            path (str): 新しいパス
+            display_path: 表示用のパス
+            rel_path: 内部参照用の相対パス
         """
-        self.debug_info(f"パスが変更されました: {path}")
-        self.path_nav.set_path(path)
+        self.debug_info(f"パスが変更されました: 表示={display_path}, 相対={rel_path}")
+        self.path_nav.set_path(display_path, rel_path)
     
     def _handle_status_message(self, message: str):
         """
@@ -435,10 +461,14 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
     
     def _handle_loading_start(self):
         """読み込み開始ハンドラ"""
+        # カーソルを砂時計（待機中）に変更
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         self.statusBar().showMessage("読み込み中...")
     
     def _handle_loading_end(self):
         """読み込み終了ハンドラ"""
+        # カーソルを元に戻す
+        QApplication.restoreOverrideCursor()
         self.statusBar().clearMessage()
 
 
@@ -448,6 +478,8 @@ def main():
     parser = argparse.ArgumentParser(description="SupraView - アーカイブビューア")
     parser.add_argument("path", nargs="?", help="開くファイルまたはディレクトリのパス")
     parser.add_argument("--debug", action="store_true", help="デバッグモードで起動")
+    
+    # ここでメソッド名を修正: parseArgs() -> parse_args()
     args = parser.parse_args()
     
     # デバッグモードが指定されていれば、ログレベルを調整
