@@ -16,8 +16,8 @@ except ImportError:
     print("PySide6が必要です。pip install pyside6 でインストールしてください。")
     sys.exit(1)
 
-# 自然順ソートユーティリティをインポート
-from ..utils.sort import get_sorted_keys
+# 共通のフォルダメニュービルダーをインポート
+from .folder_menu import FolderMenuBuilder
 
 
 class ViewerContextMenu:
@@ -58,11 +58,6 @@ class ViewerContextMenu:
         self.folders_menu.setEnabled(False)  # 初期状態では無効
         self.menu.addMenu(self.folders_menu)
         
-        # ルートフォルダアクション - 空文字列ではなく "/" を渡す
-        self.root_action = QAction("/ (ルート)", parent)
-        self.root_action.triggered.connect(lambda: self._navigate_to("/"))
-        self.folders_menu.addAction(self.root_action)
-        
         # セパレータを追加
         self.menu.addSeparator()
         
@@ -76,9 +71,6 @@ class ViewerContextMenu:
         
         # 設定メニューを追加
         self.menu.addMenu(self.settings_menu)
-        
-        # フォルダツリー構造を保持する辞書
-        self.folder_tree = {}
     
     def show(self, position):
         """
@@ -126,114 +118,15 @@ class ViewerContextMenu:
         Args:
             entry_cache: エントリキャッシュ辞書
         """
-        # フォルダツリーの構築
-        self.folder_tree = {}
+        # FolderMenuBuilderを使用してフォルダメニューを構築
+        FolderMenuBuilder.build_root_menu(
+            parent_menu=self.folders_menu,
+            action_callback=self._navigate_to,
+            entry_cache=entry_cache
+        )
         
-        # エントリキャッシュが空の場合は何もしない
-        if not entry_cache:
-            self.folders_menu.setEnabled(False)
-            return
-            
         # メニューを有効化
-        self.folders_menu.setEnabled(True)
-        
-        # ルートフォルダ以外のアクションを全て削除
-        actions = self.folders_menu.actions()
-        for action in actions[1:]:  # ルートアクションは維持
-            self.folders_menu.removeAction(action)
-            
-        # セパレータを追加
-        self.folders_menu.addSeparator()
-        
-        # エントリキャッシュからすべてのディレクトリパスを抽出
-        dir_paths = set()
-        
-        # キー（パス）のみ使用してフォルダツリーを構築
-        for path in entry_cache.keys():
-            # 空のパスはルートなのでスキップ
-            if not path:
-                continue
-                
-            # このパス自体がフォルダかどうかを確認
-            entry_info = entry_cache.get(path)
-            is_dir = entry_info and hasattr(entry_info, 'type') and entry_info.type and entry_info.type.is_dir()
-            
-            # ディレクトリの場合はパスを追加
-            if is_dir:
-                dir_paths.add(path)
-            
-            # 親ディレクトリもすべて追加
-            parts = path.split('/')
-            current_path = ""
-            for i in range(len(parts) - 1):
-                if parts[i]:
-                    if current_path:
-                        current_path += f"/{parts[i]}"
-                    else:
-                        current_path = parts[i]
-                    dir_paths.add(current_path)
-        
-        # ツリー構造を構築
-        for path in sorted(dir_paths):
-            parts = path.split('/')
-            current = self.folder_tree
-            
-            for part in parts:
-                if not part:  # 空のパートはスキップ
-                    continue
-                    
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-        
-        # メニューを再帰的に構築
-        self._build_folder_menu(self.folders_menu, self.folder_tree, "")
-
-    def _build_folder_menu(self, parent_menu: QMenu, folder_dict: dict, parent_path: str):
-        """
-        フォルダメニューを再帰的に構築
-        
-        Args:
-            parent_menu: 親メニュー
-            folder_dict: フォルダ構造の辞書
-            parent_path: 親フォルダのパス
-        """
-        # 辞書内のキーを大文字小文字を区別せずにソート - 共通モジュールを使用
-        sorted_keys = get_sorted_keys(folder_dict.keys(), ignore_case=True)
-        
-        # 各フォルダについてメニューアイテムを作成
-        for folder_name in sorted_keys:
-            # フォルダのフルパスを構築
-            if parent_path:
-                folder_path = f"{parent_path}/{folder_name}"
-            else:
-                folder_path = folder_name
-            
-            # サブフォルダの辞書
-            subfolders = folder_dict[folder_name]
-            
-            if subfolders:  # サブフォルダがある場合
-                # サブメニューを作成
-                submenu = QMenu(folder_name, parent_menu)
-                
-                # このフォルダ自体に移動するアクション
-                self_action = QAction("このフォルダを開く", parent_menu)
-                self_action.triggered.connect(lambda checked=False, path=folder_path: self._navigate_to(path))
-                submenu.addAction(self_action)
-                
-                # 区切り線
-                submenu.addSeparator()
-                
-                # サブフォルダのメニューを再帰的に構築
-                self._build_folder_menu(submenu, subfolders, folder_path)
-                
-                # 親メニューにサブメニューを追加
-                parent_menu.addMenu(submenu)
-            else:  # サブフォルダがない場合
-                # 通常のアクションを作成
-                action = QAction(folder_name, parent_menu)
-                action.triggered.connect(lambda checked=False, path=folder_path: self._navigate_to(path))
-                parent_menu.addAction(action)
+        self.folders_menu.setEnabled(entry_cache is not None and len(entry_cache) > 0)
     
     def _navigate_to(self, path: str):
         """

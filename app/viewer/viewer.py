@@ -176,7 +176,8 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
             self,
             options=original_options,
             current_method=original_method,
-            current_scale=original_scale
+            current_scale=original_scale,
+            sr_manager=self.sr_manager  # EnhancedSRManagerインスタンスを渡す
         )
         
         if dialog.exec():

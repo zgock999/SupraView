@@ -16,13 +16,15 @@ from PySide6.QtGui import QIcon
 
 from sr.sr_base import SRMethod
 from app.viewer.superres import SuperResolutionManager
+from app.viewer.superres.sr_enhanced import EnhancedSRManager
 
 
 class SuperResolutionSettingsDialog(QDialog):
     """超解像処理の設定ダイアログ"""
     
     def __init__(self, parent=None, options: Dict[str, Any] = None, 
-                 current_method: SRMethod = None, current_scale: int = 2):
+                 current_method: SRMethod = None, current_scale: int = 2,
+                 sr_manager: EnhancedSRManager = None):
         super().__init__(parent)
         
         self.setWindowTitle("超解像処理設定")
@@ -32,7 +34,15 @@ class SuperResolutionSettingsDialog(QDialog):
         self.options = options or {}
         self.current_method = current_method or SRMethod.REALESRGAN
         self.current_scale = current_scale or 2
-        self.auto_process = True  # 自動処理有効
+        
+        # 超解像処理マネージャーの参照を保存
+        self.sr_manager = sr_manager
+        
+        # 自動処理設定をマネージャから取得（マネージャがある場合）
+        if self.sr_manager and hasattr(self.sr_manager, 'auto_process'):
+            self.auto_process = self.sr_manager.auto_process
+        else:
+            self.auto_process = True  # デフォルト値
         
         # メソッドの利用可能性を確認
         self.available_methods = self.get_production_methods()
@@ -48,6 +58,11 @@ class SuperResolutionSettingsDialog(QDialog):
         実運用に適した超解像メソッドのリストを取得
         (OpenCVメソッドを除外)
         """
+        # EnhancedSRManagerが利用可能であればそちらから取得
+        if self.sr_manager:
+            return self.sr_manager.get_production_methods()
+        
+        # 従来のコード（フォールバック）
         all_methods = SuperResolutionManager.get_available_methods()
         production_methods = []
         
@@ -112,12 +127,12 @@ class SuperResolutionSettingsDialog(QDialog):
         gpu_layout = QFormLayout(gpu_group)
         
         # CUDA利用可能状態
-        cuda_available = SuperResolutionManager.is_cuda_available()
+        cuda_available = self._is_cuda_available()
         self.cuda_label = QLabel("利用可能" if cuda_available else "利用不可")
         gpu_layout.addRow("CUDA:", self.cuda_label)
         
         # GPU情報
-        gpu_info = SuperResolutionManager.get_gpu_info()
+        gpu_info = self._get_gpu_info()
         if gpu_info:
             gpu_name = gpu_info.get("name", "不明")
             vram_total = gpu_info.get("total_memory", 0) / (1024 * 1024) # MB単位
@@ -143,6 +158,18 @@ class SuperResolutionSettingsDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         main_layout.addWidget(button_box)
+    
+    def _is_cuda_available(self) -> bool:
+        """CUDAが利用可能かどうか確認"""
+        if self.sr_manager:
+            return self.sr_manager.is_cuda_available()
+        return SuperResolutionManager.is_cuda_available()
+    
+    def _get_gpu_info(self) -> Dict[str, Any]:
+        """GPU情報を取得"""
+        if self.sr_manager:
+            return self.sr_manager.get_gpu_info()
+        return SuperResolutionManager.get_gpu_info()
     
     def populate_method_combo(self):
         """メソッド選択コンボボックスの初期化"""
@@ -185,7 +212,7 @@ class SuperResolutionSettingsDialog(QDialog):
         # 現在選択されているメソッドに対応するスケールを取得
         method = self.get_current_method()
         if method:
-            supported_scales = SuperResolutionManager.get_supported_scales(method)
+            supported_scales = self._get_supported_scales(method)
             
             # サポートされているスケールがない場合はデフォルト値を設定
             if not supported_scales:
@@ -194,6 +221,12 @@ class SuperResolutionSettingsDialog(QDialog):
             # スケールオプションを追加
             for scale in supported_scales:
                 self.scale_combo.addItem(f"{scale}倍", scale)
+    
+    def _get_supported_scales(self, method: SRMethod) -> List[int]:
+        """指定したメソッドでサポートされるスケールのリストを取得"""
+        if self.sr_manager:
+            return self.sr_manager.get_supported_scales(method)
+        return SuperResolutionManager.get_supported_scales(method)
     
     def get_current_method(self) -> Optional[SRMethod]:
         """現在選択されているメソッドを取得"""
@@ -248,13 +281,20 @@ class SuperResolutionSettingsDialog(QDialog):
         model_layout.addRow("モデルタイプ:", self.realesrgan_model_combo)
         
         # デノイズ強度
-        self.denoise_spin = QDoubleSpinBox()
-        self.denoise_spin.setRange(0, 1)
-        self.denoise_spin.setSingleStep(0.1)
-        self.denoise_spin.setDecimals(1)
-        self.denoise_spin.setValue(0.5)  # デフォルト値
-        self.denoise_spin.setToolTip("デノイズの適用強度 (0=無効, 1=最大)")
-        model_layout.addRow("デノイズ強度:", self.denoise_spin)
+        denoise_layout = QHBoxLayout()
+        self.denoise_slider = QSlider(Qt.Horizontal)
+        self.denoise_slider.setRange(0, 100)
+        self.denoise_slider.setValue(50)  # デフォルト値
+        self.denoise_slider.setToolTip("デノイズの適用強度 (0=無効, 1=最大)")
+        
+        self.denoise_value_label = QLabel("0.50")
+        self.denoise_slider.valueChanged.connect(
+            lambda v: self.denoise_value_label.setText(f"{v/100:.2f}")
+        )
+        
+        denoise_layout.addWidget(self.denoise_slider)
+        denoise_layout.addWidget(self.denoise_value_label)
+        model_layout.addRow("デノイズ強度:", denoise_layout)
         
         # 顔強調オプション
         self.face_enhance_check = QCheckBox("有効")
@@ -287,17 +327,7 @@ class SuperResolutionSettingsDialog(QDialog):
         self.window_size_combo.addItem("4 (低品質/高速)", 4)
         self.window_size_combo.setToolTip("ウィンドウサイズが大きいほど高品質になりますが、処理時間とメモリ使用量が増えます")
         model_layout.addRow("ウィンドウサイズ:", self.window_size_combo)
-        
-        # JPEG圧縮アーティファクト対応
-        self.jpeg_artifact_check = QCheckBox("有効")
-        self.jpeg_artifact_check.setToolTip("JPEG圧縮によるノイズを低減します（実写向けモデルのみ対応）")
-        model_layout.addRow("JPEG圧縮対応:", self.jpeg_artifact_check)
-        
-        # 半精度オプション
-        self.swinir_half_precision_check = QCheckBox("有効")
-        self.swinir_half_precision_check.setToolTip("メモリ使用量を削減しますが、わずかに品質が低下する場合があります")
-        model_layout.addRow("半精度処理:", self.swinir_half_precision_check)
-        
+                      
         swinir_layout.addWidget(model_group)
         
         # スペーサー
@@ -326,69 +356,66 @@ class SuperResolutionSettingsDialog(QDialog):
                 self.scale_combo.setCurrentIndex(i)
                 break
         
-        # タイルサイズの初期値
-        tile_size = self.options.get('tile', 512)
-        self.tile_spin.setValue(tile_size)
-        
         # 自動処理の初期値
+        # マネージャから読み取った値を優先する
         self.auto_process_check.setChecked(self.auto_process)
         
-        # RealESRGAN設定の初期値
-        variant = self.options.get('variant', 'denoise')
-        denoise_strength = self.options.get('denoise_strength', 0.5)
-        face_enhance = self.options.get('face_enhance', False)
+        # メソッド固有の設定を取得
+        current_method = self.get_current_method()
+        method_options = {}
         
-        # バリアントの初期値を設定
-        for i in range(self.variant_combo.count()):
-            if self.variant_combo.itemText(i) == variant:
-                self.variant_combo.setCurrentIndex(i)
-                break
+        # マネージャーから_get_processed_optionsを使用してメソッド固有のデフォルト設定を取得
+        if self.sr_manager and hasattr(self.sr_manager, '_get_processed_options'):
+            try:
+                # 現在のメソッドとオプションを取得
+                current_method = self.sr_manager._method if hasattr(self.sr_manager, '_method') else None
+                # 直接内部変数を参照せず、メソッドを通じて処理済みオプションを取得
+                method_options = self.sr_manager._get_processed_options(current_method, None)
+                
+                # ここでmethod_optionsを使用してUI要素を更新
+                # ...existing code...
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"設定の初期化中にエラーが発生しました: {e}")
         
-        # デノイズ強度の初期値を設定
-        self.denoise_slider.setValue(int(denoise_strength * 100))
+        # オプションの優先順位: 1. method_options(デフォルト値) 2. self.options(引数)
         
-        # 顔強調の初期値を設定
-        self.face_enhance_check.setChecked(face_enhance)
+        # タイルサイズの初期値（全メソッド共通）
+        tile_size = method_options.get('tile', self.options.get('tile', 512))
+        self.tile_spin.setValue(tile_size)
         
-        # RealESRGAN設定の初期値
-        realesrgan_options = self.options.get('realesrgan', {})
-        
-        # モデルタイプ
-        variant = self.options.get('variant', 'denoise')
-        variant_map = {'denoise': 0, 'standard': 1, 'anime': 2}
-        self.realesrgan_model_combo.setCurrentIndex(variant_map.get(variant, 0))
-        
-        # デノイズ強度
-        denoise_strength = self.options.get('denoise_strength', 0.5)
-        self.denoise_spin.setValue(denoise_strength)
-        
-        # 顔強調
-        face_enhance = self.options.get('face_enhance', False)
-        self.face_enhance_check.setChecked(face_enhance)
-        
-        # 半精度処理
-        half_precision = self.options.get('half_precision', False)
-        self.half_precision_check.setChecked(half_precision)
-        
-        # SwinIR設定の初期値
-        swinir_options = self.options.get('swinir', {})
-        
-        # ウィンドウサイズ
-        window_size = swinir_options.get('window_size', 8)
-        window_size_index = 0
-        if window_size == 16:
-            window_size_index = 1
-        elif window_size == 4:
-            window_size_index = 2
-        self.window_size_combo.setCurrentIndex(window_size_index)
-        
-        # JPEG圧縮アーティファクト対応
-        jpeg_artifact = swinir_options.get('jpeg_artifact', False)
-        self.jpeg_artifact_check.setChecked(jpeg_artifact)
-        
-        # 半精度処理
-        swinir_half_precision = swinir_options.get('half_precision', False)
-        self.swinir_half_precision_check.setChecked(swinir_half_precision)
+        # RealESRGAN設定
+        if current_method == SRMethod.REALESRGAN:
+            # バリアント
+            variant = method_options.get('variant', self.options.get('variant', 'denoise'))
+            variant_map = {'denoise': 0, 'standard': 1, 'anime': 2}
+            self.realesrgan_model_combo.setCurrentIndex(variant_map.get(variant, 0))
+            
+            # デノイズ強度
+            denoise_strength = method_options.get('denoise_strength', self.options.get('denoise_strength', 0.5))
+            self.denoise_slider.setValue(int(denoise_strength * 100))
+            
+            # 顔強調
+            face_enhance = method_options.get('face_enhance', self.options.get('face_enhance', False))
+            self.face_enhance_check.setChecked(face_enhance)
+            
+            # 半精度処理
+            half_precision = method_options.get('half_precision', self.options.get('half_precision', False))
+            self.half_precision_check.setChecked(half_precision)
+            
+        # SwinIR設定
+        elif current_method in [SRMethod.SWINIR_LIGHTWEIGHT, SRMethod.SWINIR_REAL, 
+                               SRMethod.SWINIR_LARGE, SRMethod.SWINIR_CLASSICAL]:
+            # ウィンドウサイズ
+            window_size = method_options.get('window_size', self.options.get('window_size', 8))
+            window_size_index = 0
+            if window_size == 16:
+                window_size_index = 1
+            elif window_size == 4:
+                window_size_index = 2
+            self.window_size_combo.setCurrentIndex(window_size_index)
+            
     
     def get_settings(self) -> Dict[str, Any]:
         """ダイアログから設定を取得"""
@@ -428,7 +455,7 @@ class SuperResolutionSettingsDialog(QDialog):
                 options['variant'] = model_value
                 
                 # デノイズ強度
-                options['denoise_strength'] = self.denoise_spin.value()
+                options['denoise_strength'] = self.denoise_slider.value() / 100.0
                 
                 # 顔強調
                 options['face_enhance'] = self.face_enhance_check.isChecked()
@@ -438,7 +465,7 @@ class SuperResolutionSettingsDialog(QDialog):
                 
                 # RealESRGAN固有オプションをサブディクショナリに保存
                 realesrgan_options['realesrgan_model'] = self.realesrgan_model_combo.currentText()
-                realesrgan_options['denoise_strength'] = self.denoise_spin.value()
+                realesrgan_options['denoise_strength'] = self.denoise_slider.value() / 100.0
                 realesrgan_options['face_enhance'] = self.face_enhance_check.isChecked()
                 realesrgan_options['half_precision'] = self.half_precision_check.isChecked()
                 
@@ -454,16 +481,9 @@ class SuperResolutionSettingsDialog(QDialog):
                 window_value = self.window_size_combo.itemData(window_index)
                 options['window_size'] = window_value
                 
-                # JPEG圧縮アーティファクト対応
-                options['jpeg_artifact'] = self.jpeg_artifact_check.isChecked()
-                
-                # 半精度処理
-                options['half_precision'] = self.swinir_half_precision_check.isChecked()
                 
                 # SwinIR固有オプションをサブディクショナリに保存
                 swinir_options['window_size'] = window_value
-                swinir_options['jpeg_artifact'] = self.jpeg_artifact_check.isChecked()
-                swinir_options['half_precision'] = self.swinir_half_precision_check.isChecked()
                 
                 options['swinir'] = swinir_options
         

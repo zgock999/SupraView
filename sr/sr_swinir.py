@@ -24,10 +24,9 @@ from sr.swinir.swinir_model import SwinIR, SwinIRModelType, make_model
 # SwinIRモデルのダウンロードURL
 SWINIR_MODEL_URLS = {
     # Real-SR モデル (標準
-    'real_sr_x2': 'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-M_x2_GAN.pth',
+    'real_sr_x2': "https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN-with-dict-keys-params-and-params_ema.pth",
     'real_sr_x3': 'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-M_x3_GAN.pth',
-    'real_sr_x4': 'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN.pth',
-    
+    'real_sr_x4': 'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN-with-dict-keys-params-and-params_ema.pth',
     # Real-SR モデル (大規模)
     'real_sr_large_x2': 'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x2_GAN.pth',
     'real_sr_large_x4': 'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN.pth',
@@ -288,6 +287,10 @@ class SwinIRSuperResolution(SuperResolutionBase):
             model_file = f'003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x{self.scale}_GAN.pth'
         elif self.model_type == SwinIRModelType.REAL_SR:
             model_file = f'003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x{self.scale}_GAN.pth'
+            if self.scale == 4:
+                model_file = "003_realSR_BSRGAN_DFO_s64w8_SwinIR-L_x4_GAN-with-dict-keys-params-and-params_ema.pth"
+            else:
+                model_file = "003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN-with-dict-keys-params-and-params_ema.pth"
         elif self.model_type == SwinIRModelType.CLASSICAL_SR:
             model_file = f'001_classicalSR_DF2K_s64w8_SwinIR-M_x{self.scale}.pth'
         elif self.model_type == SwinIRModelType.LIGHTWEIGHT_SR:

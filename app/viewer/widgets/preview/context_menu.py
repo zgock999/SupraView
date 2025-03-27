@@ -6,9 +6,9 @@ ImagePreviewWindowで使用するコンテキストメニューを提供しま�
 
 from PySide6.QtWidgets import QMenu
 from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QAction, QActionGroup  # QActionGroupをQtGuiからインポート
+from PySide6.QtGui import QAction, QActionGroup, QIcon  # QIconを追加
 from logutils import log_print, DEBUG, INFO, WARNING, ERROR
-
+import os
 
 class PreviewContextMenu(QMenu):
     """プレビューウィンドウ用のコンテキストメニュー"""
@@ -101,6 +101,35 @@ class PreviewContextMenu(QMenu):
         # ウィンドウ操作
         self.close_action = QAction("閉じる", self)
         self.close_action.triggered.connect(self._on_close)
+        
+        # ナビゲーション関連のアクション - 新規追加
+        self.first_image_action = QAction("先頭画像へ", self)
+        self.first_image_action.triggered.connect(self._on_first_image)
+        
+        self.prev_image_action = QAction("前の画像", self)
+        self.prev_image_action.triggered.connect(self._on_prev_image)
+        
+        self.next_image_action = QAction("次の画像", self)
+        self.next_image_action.triggered.connect(self._on_next_image)
+        
+        self.last_image_action = QAction("最後の画像へ", self)
+        self.last_image_action.triggered.connect(self._on_last_image)
+        
+        self.first_folder_image_action = QAction("フォルダの先頭画像へ", self)
+        self.first_folder_image_action.triggered.connect(self._on_first_folder_image)
+        
+        self.last_folder_image_action = QAction("フォルダの最後の画像へ", self)
+        self.last_folder_image_action.triggered.connect(self._on_last_folder_image)
+        
+        self.prev_folder_action = QAction("前のフォルダ", self)
+        self.prev_folder_action.triggered.connect(self._on_prev_folder)
+        
+        self.next_folder_action = QAction("次のフォルダ", self)
+        self.next_folder_action.triggered.connect(self._on_next_folder)
+        
+        # フルスクリーンアクション
+        self.toggle_fullscreen_action = QAction("フルスクリーン切替", self)
+        self.toggle_fullscreen_action.triggered.connect(self._on_toggle_fullscreen)
     
     def _build_menu(self):
         """メニュー構造の構築"""
@@ -126,6 +155,29 @@ class PreviewContextMenu(QMenu):
         image_menu.addSeparator()
         image_menu.addAction(self.superres_action)  # 超解像処理メニュー項目を追加
         
+        # 移動メニュー - 新規追加
+        navigation_menu = self.addMenu("移動")
+        navigation_menu.addAction(self.first_image_action)
+        navigation_menu.addAction(self.prev_image_action)
+        navigation_menu.addAction(self.next_image_action)
+        navigation_menu.addAction(self.last_image_action)
+        navigation_menu.addSeparator()
+        navigation_menu.addAction(self.first_folder_image_action)
+        navigation_menu.addAction(self.last_folder_image_action)
+        navigation_menu.addSeparator()
+        navigation_menu.addAction(self.prev_folder_action)
+        navigation_menu.addAction(self.next_folder_action)
+        navigation_menu.addSeparator()
+        
+        # フォルダ移動サブメニュー - 初期化時に一度だけ構築
+        self.folder_menu = navigation_menu.addMenu("フォルダに移動")
+        
+        # フォルダメニューの初期構築
+        self._build_folder_menu_structure()
+        
+        navigation_menu.addSeparator()
+        navigation_menu.addAction(self.toggle_fullscreen_action)
+        
         # ファイル操作
         self.addSeparator()
         self.addAction(self.save_as_action)
@@ -134,6 +186,81 @@ class PreviewContextMenu(QMenu):
         # ウィンドウ操作
         self.addSeparator()
         self.addAction(self.close_action)
+    
+    def _build_folder_menu_structure(self):
+        """フォルダメニューの基本構造を構築（一度だけ実行）"""
+        # アーカイブマネージャを取得
+        archive_manager = None
+        if self.parent and hasattr(self.parent, 'archive_manager') and self.parent.archive_manager:
+            archive_manager = self.parent.archive_manager
+        else:
+            self.folder_menu.setEnabled(False)
+            return
+        
+        try:
+            # FolderMenuBuilderを使用してフォルダメニューを構築するために、エントリキャッシュを取得
+            entry_cache = None
+            if hasattr(archive_manager, 'get_entry_cache'):
+                entry_cache = archive_manager.get_entry_cache()
+                log_print(DEBUG, f"アーカイブマネージャからエントリキャッシュを取得: {len(entry_cache) if entry_cache else 0}エントリ")
+            
+            # menu.folder_menu.pyからFolderMenuBuilderをインポート
+            from ...menu.folder_menu import FolderMenuBuilder
+            
+            # FolderMenuBuilderを使用してフォルダメニューを構築
+            FolderMenuBuilder.build_root_menu(
+                parent_menu=self.folder_menu,
+                action_callback=self._on_jump_to_folder,
+                entry_cache=entry_cache
+            )
+            
+            # エントリキャッシュがない場合の対応
+            if not entry_cache:
+                # 代替方法：シンプルなルートメニューだけ提供
+                self.folder_menu.addAction(QAction("ルートディレクトリ", self.folder_menu)).triggered.connect(
+                    lambda: self._on_jump_to_folder("")
+                )
+                
+            # メニューを有効化
+            self.folder_menu.setEnabled(True)
+            
+        except Exception as e:
+            log_print(ERROR, f"フォルダメニューの構築中にエラー: {e}")
+            import traceback
+            log_print(DEBUG, traceback.format_exc())
+            
+            # エラーメッセージを表示
+            error_action = QAction("フォルダ一覧を取得できませんでした", self)
+            error_action.setEnabled(False)
+            self.folder_menu.addAction(error_action)
+    
+    def _update_folder_menu(self):
+        """
+        フォルダ移動メニューを更新する - 現在のディレクトリを強調表示するだけ
+        メニュー構造は_build_menu時に一度だけ構築されるため、ここでは現在位置の表示のみを更新
+        """
+        # 親ウィンドウが存在し、ブラウザが初期化されているか確認
+        if not self.parent or (not hasattr(self.parent, '_browser') or not self.parent._browser):
+            return
+        
+        try:
+            # 現在のディレクトリ情報を取得
+            current_path = ""
+            if hasattr(self.parent, '_browser') and self.parent._browser:
+                current_path = self.parent._browser.get_current_directory()
+            
+            # 現在の位置をステータスバーに表示
+            if current_path and hasattr(self.parent, 'statusbar'):
+                dir_name = current_path.split("/")[-1] if "/" in current_path else current_path
+                dir_name = "ルート" if not dir_name else dir_name
+                # 現在表示しているフォルダ情報を更新
+                self.parent.statusbar.showMessage(f"現在のフォルダ: {dir_name}")
+                
+            # 注: ここではメニュー内の項目に対するチェックマークや強調表示などの
+            # 視覚的な更新は行わない。必要に応じて実装可能。
+            
+        except Exception as e:
+            log_print(ERROR, f"フォルダメニュー更新中にエラー: {e}")
     
     def popup(self, pos):
         """
@@ -165,6 +292,9 @@ class PreviewContextMenu(QMenu):
         # 超解像処理メニューの有効/無効を設定
         self._update_superres_action_state()
         
+        # フォルダ移動メニューを更新
+        self._update_folder_menu()
+        
         # 親クラスのpopupメソッドを呼び出し
         super().popup(self._last_global_position)
     
@@ -182,14 +312,35 @@ class PreviewContextMenu(QMenu):
         
         # 超解像処理メニューの有効/無効を更新
         self._update_superres_action_state()
+        
+        # フォルダ移動メニューを更新
+        self._update_folder_menu()
     
     def _update_superres_action_state(self):
         """超解像処理メニューの有効/無効状態を更新"""
         # 親ウィンドウが存在し、超解像処理マネージャが設定されているか確認
-        has_sr_manager = hasattr(self.parent, 'sr_manager') and self.parent.sr_manager is not None
+        has_sr_manager = False
+        
+        # 親ウィンドウが存在するか確認
+        if self.parent:
+            # 直接sr_managerプロパティがある場合
+            if hasattr(self.parent, 'sr_manager') and self.parent.sr_manager is not None:
+                has_sr_manager = True
+            # image_handler経由でsr_managerが設定されている場合
+            elif hasattr(self.parent, 'image_handler') and hasattr(self.parent.image_handler, 'sr_manager') and self.parent.image_handler.sr_manager is not None:
+                has_sr_manager = True
         
         # 超解像マネージャが初期化中かどうか確認
-        initializing = has_sr_manager and hasattr(self.parent.sr_manager, 'is_initializing') and self.parent.sr_manager.is_initializing
+        initializing = False
+        if has_sr_manager:
+            # 直接sr_managerプロパティがある場合
+            if hasattr(self.parent, 'sr_manager') and hasattr(self.parent.sr_manager, 'is_initializing'):
+                initializing = self.parent.sr_manager.is_initializing
+            # image_handler経由でsr_managerを参照する場合
+            elif hasattr(self.parent, 'image_handler') and hasattr(self.parent.image_handler, 'sr_manager'):
+                sr_manager = self.parent.image_handler.sr_manager
+                if hasattr(sr_manager, 'is_initializing'):
+                    initializing = sr_manager.is_initializing
         
         # クリック位置に画像があるかどうか確認
         target_index = self._get_target_image_index()
@@ -529,3 +680,85 @@ class PreviewContextMenu(QMenu):
         
         # 親クラスのexecメソッドを呼び出し
         return super().exec(pos)
+        
+    # ナビゲーション関連のメソッド - 新規追加
+    def _on_first_image(self):
+        """先頭画像に移動"""
+        if hasattr(self.parent, '_on_first_image'):
+            self.parent._on_first_image()
+    
+    def _on_prev_image(self):
+        """前の画像に移動"""
+        if hasattr(self.parent, '_on_prev_image'):
+            self.parent._on_prev_image()
+    
+    def _on_next_image(self):
+        """次の画像に移動"""
+        if hasattr(self.parent, '_on_next_image'):
+            self.parent._on_next_image()
+    
+    def _on_last_image(self):
+        """最後の画像に移動"""
+        if hasattr(self.parent, '_on_last_image'):
+            self.parent._on_last_image()
+    
+    def _on_first_folder_image(self):
+        """フォルダの先頭画像に移動"""
+        if hasattr(self.parent, '_on_first_folder_image'):
+            self.parent._on_first_folder_image()
+    
+    def _on_last_folder_image(self):
+        """フォルダの最後の画像に移動"""
+        if hasattr(self.parent, '_on_last_folder_image'):
+            self.parent._on_last_folder_image()
+    
+    def _on_prev_folder(self):
+        """前のフォルダに移動"""
+        if hasattr(self.parent, '_on_prev_folder'):
+            self.parent._on_prev_folder()
+    
+    def _on_next_folder(self):
+        """次のフォルダに移動"""
+        if hasattr(self.parent, '_on_next_folder'):
+            self.parent._on_next_folder()
+    
+    def _on_jump_to_folder(self, path: str):
+        """指定されたフォルダに移動"""
+        if not self.parent or not hasattr(self.parent, '_browser') or not self.parent._browser:
+            log_print(ERROR, "ブラウザインスタンスがありません")
+            return
+            
+        try:
+            # ブラウザインスタンスを使用してフォルダにジャンプ
+            browser = self.parent._browser
+            success = browser.jump(path)
+            
+            if success:
+                # ブラウザからの画像更新を要求
+                log_print(INFO, f"フォルダ '{path}' に移動しました")
+                if hasattr(self.parent, '_update_images_from_browser'):
+                    self.parent._update_images_from_browser()
+                
+                # ステータスバーに表示
+                if hasattr(self.parent, 'statusbar'):
+                    dir_name = path.split("/")[-1] if "/" in path else path
+                    dir_name = "ルート" if not dir_name else dir_name
+                    self.parent.statusbar.showMessage(f"フォルダ '{dir_name}' に移動しました")
+            else:
+                log_print(ERROR, f"フォルダ '{path}' への移動に失敗しました")
+                if hasattr(self.parent, 'statusbar'):
+                    self.parent.statusbar.showMessage(f"フォルダへの移動に失敗しました")
+                    
+        except Exception as e:
+            log_print(ERROR, f"フォルダ移動中にエラー: {e}")
+            import traceback
+            log_print(DEBUG, traceback.format_exc())
+            
+            # ステータスバーにエラーを表示
+            if hasattr(self.parent, 'statusbar'):
+                self.parent.statusbar.showMessage(f"エラー: フォルダへの移動に失敗しました")
+    
+    def _on_toggle_fullscreen(self):
+        """フルスクリーン切替"""
+        if hasattr(self.parent, '_on_toggle_fullscreen'):
+            self.parent._on_toggle_fullscreen()

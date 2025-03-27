@@ -319,7 +319,7 @@ def get_method_supported_scales(method: SRMethod) -> List[int]:
     elif method == SRMethod.SWINIR_LIGHTWEIGHT:
         return [2, 3, 4]
     elif method == SRMethod.SWINIR_REAL:
-        return [4]
+        return [2, 4]
     elif method == SRMethod.SWINIR_CLASSICAL:
         return [2, 3, 4]
     elif method == SRMethod.SWINIR_LARGE:
