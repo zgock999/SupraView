@@ -7,13 +7,16 @@
 import os
 import sys
 from typing import Optional, Dict, Any, List, Tuple
+import numpy as np
+from PySide6.QtGui import QImage
+import cv2
 
 # プロジェクトルートへのパスを追加
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from logutils import log_print, INFO, WARNING, ERROR, DEBUG, CRITICAL
+from logutils import log_print,log_trace, INFO, WARNING, ERROR, DEBUG, CRITICAL
 
 try:
     from PySide6.QtGui import QPixmap
@@ -35,7 +38,9 @@ class ImageModel:
                 'numpy_array': None, # NumPy配列形式の画像データ
                 'info': {},          # 画像の情報（サイズ、形式など）
                 'path': "",          # 画像のパス
-                'modified': False    # 画像が修正されたかどうか
+                'modified': False,   # 画像が修正されたかどうか
+                'sr_array': None,    # 超解像処理後のNumPy配列
+                'sr_request': None   # 超解像処理リクエストのGUID
             },
             {
                 'pixmap': None,
@@ -43,7 +48,9 @@ class ImageModel:
                 'numpy_array': None,
                 'info': {},
                 'path': "",
-                'modified': False
+                'modified': False,
+                'sr_array': None,    # 超解像処理後のNumPy配列
+                'sr_request': None   # 超解像処理リクエストのGUID
             }
         ]
         
@@ -108,6 +115,8 @@ class ImageModel:
         self._images[index]['info'] = {}
         self._images[index]['path'] = ""
         self._images[index]['modified'] = False
+        self._images[index]['sr_array'] = None
+        self._images[index]['sr_request'] = None
         
         log_print(DEBUG, f"ImageModel: インデックス {index} の画像をクリアしました")
         return True
@@ -317,7 +326,161 @@ class ImageModel:
         self._zoom_factor = 1.0
         
         log_print(DEBUG, "ImageModel: 状態をリセットしました")
+    
+    # 超解像処理関連のメソッドを追加
+    def set_sr_array(self, index: int, sr_array: Any) -> bool:
+        """
+        超解像処理された画像をnp.ndarray形式で設定
         
+        Args:
+            index: 画像インデックス
+            sr_array: 超解像処理された画像データ（NumPy配列）
+            
+        Returns:
+            bool: 成功したかどうか
+        """
+        if index not in [0, 1]:
+            return False
+            
+        if not isinstance(sr_array, np.ndarray):
+            return False
+            
+        try:
+              
+            original_info = self._images[index].get('info', {}).copy()
+            
+            # サイズ情報を更新
+            h, w = sr_array.shape[:2]
+            channels = 1 if len(sr_array.shape) == 2 else sr_array.shape[2]
+            
+            # 元情報に加えて新しいサイズ情報を設定
+            info = original_info.copy()
+            info.update({
+                'width': w,
+                'height': h,
+                'channels': channels,
+                'superres': True,  # 超解像処理されたことを示すフラグ
+            })
+
+            if not sr_array.flags['C_CONTIGUOUS']:
+                sr_array = np.ascontiguousarray(sr_array)
+            
+            # NumPy配列からQImageを作成（channels数に応じて処理）
+            if channels == 1:  # グレースケール
+                img = QImage(sr_array.data, w, h, w, QImage.Format_Grayscale8)
+                log_print(DEBUG, "Format_Grayscale8のQImageを作成しました")
+            elif channels == 3:  # RGB
+                img = QImage(sr_array.data, w, h, w * 3, QImage.Format_RGB888)
+                log_print(DEBUG, "Format_RGB888のQImageを作成しました")
+            elif channels == 4:  # RGBA
+                img = QImage(sr_array.data, w, h, w * 4, QImage.Format_ARGB32)
+                log_print(DEBUG, "Format_ARGB32のQImageを作成しました")
+            else:
+                return False
+            log_print(DEBUG, f"超解像処理された画像を設定しました: index={index}, size={w}x{h}, channels={channels}")               
+            # QImageからQPixmapを作成
+            pixmap = QPixmap.fromImage(img)
+            log_print(DEBUG, f"pixmapを作成しました")
+            
+            # 情報を更新
+            self._images[index]['pixmap'] = pixmap
+            self._images[index]['info'] = info
+            self._images[index]['sr_array'] = sr_array
+            self._images[index]['sr_request'] = None  # 超解像リクエストIDをクリア   
+            self._images[index]['modified'] = True  # 修正されたことを示すフラグ
+            
+            log_print(INFO, f"超解像処理された画像を設定しました: index={index}, size={w}x{h}")
+            
+            return True
+            
+        except Exception as e:
+            log_print(ERROR, f"超解像画像の設定でエラー: {e}")
+            import traceback
+            log_print(ERROR, traceback.format_exc())
+            return False
+    
+    def set_sr_request(self, index: int, request_id: str) -> bool:
+        """
+        超解像処理リクエストIDを設定
+        
+        Args:
+            index: 画像インデックス
+            request_id: 処理リクエストのGUID
+            
+        Returns:
+            bool: 設定に成功したかどうか
+        """
+        if index not in [0, 1]:
+            log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
+            return False
+            
+        self._images[index]['sr_request'] = request_id
+        
+        log_print(DEBUG, f"ImageModel: インデックス {index} に超解像リクエストID {request_id} を設定")
+        return True
+    
+    def get_sr_array(self, index: int) -> Any:
+        """
+        超解像処理後の画像データを取得
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            Any: 超解像処理後のNumPy配列（データがない場合はNone）
+        """
+        if index not in [0, 1]:
+            log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
+            return None
+        
+        return self._images[index]['sr_array']
+    
+    def get_sr_request(self, index: int) -> Optional[str]:
+        """
+        超解像処理リクエストIDを取得
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            str: 処理リクエストのGUID（リクエストがない場合はNone）
+        """
+        if index not in [0, 1]:
+            log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
+            return None
+        
+        return self._images[index]['sr_request']
+    
+    def has_sr_array(self, index: int) -> bool:
+        """
+        超解像処理後の画像データが存在するか確認
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            bool: 超解像データが存在すればTrue
+        """
+        if index not in [0, 1]:
+            return False
+        
+        return self._images[index]['sr_array'] is not None
+    
+    def has_sr_request(self, index: int) -> bool:
+        """
+        超解像処理リクエストが存在するか確認
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            bool: 超解像リクエストが存在すればTrue
+        """
+        if index not in [0, 1]:
+            return False
+        
+        return self._images[index]['sr_request'] is not None
+    
     # 以下、window.pyから移譲する表示モード関連のメソッド
     def is_dual_view(self) -> bool:
         """
@@ -438,3 +601,60 @@ class ImageModel:
                     return "dual_lr_shift"
                 else:
                     return "dual_lr"
+    
+    def __del__(self):
+        """
+        デコンストラクタ
+        
+        オブジェクト破棄時に実行中の超解像処理リクエストをキャンセルする
+        """
+        try:
+            # 画像ハンドラを取得（親ウィンドウから参照）
+            image_handler = None
+            
+            # 親ウィンドウを探す
+            parent = None
+            for obj in sys._current_frames().values():
+                if hasattr(obj, 'f_locals'):
+                    for key, val in obj.f_locals.items():
+                        if hasattr(val, 'image_handler') and hasattr(val, 'image_model') and val.image_model == self:
+                            parent = val
+                            break
+                    if parent:
+                        break
+            
+            if parent and hasattr(parent, 'image_handler'):
+                image_handler = parent.image_handler
+                log_print(DEBUG, "ImageModel: 親ウィンドウからimage_handlerを取得しました")
+            
+            # 処理中のリクエストがある場合はキャンセル
+            for index in [0, 1]:
+                if self._images[index]['sr_request'] is not None:
+                    request_id = self._images[index]['sr_request']
+                    log_print(INFO, f"ImageModel: インデックス {index} の超解像リクエスト {request_id} をキャンセルします")
+                    
+                    # image_handlerがあればキャンセル処理を委譲
+                    if image_handler and hasattr(image_handler, 'cancel_superres_request'):
+                        image_handler.cancel_superres_request(index)
+                    else:
+                        # sr_managerを直接探して処理
+                        sr_manager = None
+                        if parent and hasattr(parent, 'sr_manager'):
+                            sr_manager = parent.sr_manager
+                        elif hasattr(sys.modules.get('__main__', None), 'sr_manager'):
+                            sr_manager = sys.modules['__main__'].sr_manager
+                        
+                        if sr_manager and hasattr(sr_manager, 'cancel_superres'):
+                            sr_manager.cancel_superres(request_id)
+                            log_print(INFO, f"ImageModel: 超解像リクエスト {request_id} をキャンセルしました")
+            
+            log_print(DEBUG, "ImageModel: デコンストラクタが実行されました")
+            
+        except Exception as e:
+            # デコンストラクタ内で例外が発生してもプログラムが終了しないようにキャッチ
+            try:
+                import traceback
+                log_print(ERROR, f"ImageModel: デコンストラクタで例外が発生しました: {e}")
+                log_print(DEBUG, traceback.format_exc())
+            except:
+                pass  # 最後の手段としてエラーも無視

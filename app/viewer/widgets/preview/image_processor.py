@@ -7,7 +7,6 @@
 import os
 from typing import Tuple, Dict, Any, Optional
 import numpy as np
-
 from logutils import log_print, INFO, WARNING, ERROR, DEBUG
 
 try:
@@ -68,7 +67,6 @@ def load_image_from_bytes(image_data: bytes, file_path: str = "") -> Tuple[Optio
         numpy_array = decoder.decode(image_data)
         if numpy_array is None:
             raise ValueError(f"画像のデコードに失敗しました: {file_path}")
-        
         # numpy_arrayから画像情報を取得
         height, width = numpy_array.shape[:2]
         channels = 1 if len(numpy_array.shape) == 2 else numpy_array.shape[2]

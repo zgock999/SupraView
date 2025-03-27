@@ -618,7 +618,7 @@ class EnhancedSRManager(SuperResolutionManager):
         # 次のタスクを処理
         self._current_thread = None
         self._process_next_task()
-        
+    
     def cancel_superres(self, request_id: str) -> bool:
         """
         超解像処理をキャンセル

@@ -45,7 +45,7 @@ class ImagePreviewWindow(QMainWindow):
     # サポートする画像形式の拡張子を直接decoderから取得
     SUPPORTED_EXTENSIONS = get_supported_image_extensions()
     
-    def __init__(self, parent=None, archive_manager=None, initial_path=None, dual_view=False):
+    def __init__(self, parent=None, archive_manager=None, initial_path=None, dual_view=False, sr_manager=None):
         """
         画像プレビューウィンドウの初期化
         
@@ -54,6 +54,7 @@ class ImagePreviewWindow(QMainWindow):
             archive_manager: 画像データを取得するためのアーカイブマネージャ
             initial_path: 初期表示する画像の相対パス（省略可能）
             dual_view: デュアルビューを有効にするかどうか（デフォルトはFalse）
+            sr_manager: 超解像処理マネージャ（省略可能）
         """
         super().__init__(parent)
         
@@ -83,6 +84,11 @@ class ImagePreviewWindow(QMainWindow):
         
         # 画像ハンドラの初期化（画像モデルを渡す）
         self.image_handler = ImageHandler(self, archive_manager, self.image_model)
+        
+        # 超解像マネージャをセット（省略可能）
+        if sr_manager:
+            self.image_handler.set_superres_manager(sr_manager)
+            log_print(INFO, "超解像マネージャをプレビューウィンドウに設定しました")
         
         # ハンドラクラスの初期化（画像モデルを渡す）
         self.display_handler = DisplayHandler(self, self.image_model)
@@ -778,6 +784,41 @@ class ImagePreviewWindow(QMainWindow):
         self.activateWindow()
         # デバッグ出力
         log_print(INFO, "プレビューウィンドウが表示され、フォーカスを取得しました")
+
+    def closeEvent(self, event):
+        """ウィンドウが閉じられる際のイベント処理"""
+        try:
+            # 超解像処理のキャンセル処理
+            log_print(INFO, "プレビューウィンドウが閉じられます。超解像処理をキャンセルします。")
+            
+            # 実行中の超解像処理をキャンセル
+            if hasattr(self, 'image_model') and self.image_model:
+                # 各画像の超解像リクエストをチェック
+                for index in [0, 1]:
+                    if self.image_model.has_sr_request(index):
+                        request_id = self.image_model.get_sr_request(index)
+                        if request_id:
+                            log_print(INFO, f"超解像リクエスト {request_id} をキャンセルします")
+                            
+                            # 画像ハンドラがあればキャンセル処理を委譲
+                            if hasattr(self, 'image_handler') and self.image_handler:
+                                self.image_handler.cancel_superres_request(index)
+                            # 直接sr_managerにアクセス
+                            elif hasattr(self, 'sr_manager') and self.sr_manager:
+                                self.sr_manager.cancel_superres(request_id)
+                                self.image_model.set_sr_request(index, None)
+            
+            # 基底クラスのcloseEventを呼び出し
+            super().closeEvent(event)
+            
+        except Exception as e:
+            # 例外が発生してもウィンドウは閉じる
+            log_print(ERROR, f"ウィンドウを閉じる際に例外が発生しました: {e}")
+            import traceback
+            log_print(DEBUG, traceback.format_exc())
+            
+            # 基底クラスのcloseEventを呼び出し
+            super().closeEvent(event)
 
 
 # 単体テスト用のコード

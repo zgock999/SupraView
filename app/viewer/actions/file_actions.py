@@ -329,9 +329,17 @@ class FileActionHandler(ViewerDebugMixin):
                     try:
                         from app.viewer.widgets.preview.window import ImagePreviewWindow
                         
+                        # 親がViewerWindowであることを確認して、sr_managerを取得する
+                        sr_manager = None
+                        if hasattr(self.parent_widget, 'sr_manager'):
+                            sr_manager = self.parent_widget.sr_manager
+                            self.debug_info(f"親ウィジェットから超解像マネージャを取得しました")
+                        
+                        # プレビューウィンドウ作成時にsr_managerを渡す
                         preview_window = ImagePreviewWindow(
                             archive_manager=self.archive_manager,
-                            initial_path=path  # エントリの相対パスを使用
+                            initial_path=path,  # エントリの相対パスを使用
+                            sr_manager=sr_manager  # 超解像処理マネージャを渡す
                         )
                         preview_window.show()
                         
@@ -360,35 +368,6 @@ class FileActionHandler(ViewerDebugMixin):
             return True
     
   
-    def _open_image_preview(self, path: str) -> bool:
-        """
-        画像プレビューウィンドウを開く
-        
-        Args:
-            path: プレビューする画像ファイルのパス（カレントディレクトリからの相対パス）
-            
-        Returns:
-            成功したかどうか
-        """
-        try:
-            # 遅延インポートを使用して循環インポートを回避
-            from app.viewer.widgets.preview import ImagePreviewWindow
-            
-            # ファイルデータを読み込む
-            self.debug_info(f"画像ファイルを読み込みます: {path}")
-            
-            # プレビューウィンドウを作成
-            preview_window = ImagePreviewWindow(parent=self.parent_widget, archive_manager=self.archive_manager,initial_path=path)
-            preview_window.setWindowTitle(f"画像プレビュー - {os.path.basename(path)}")
-            preview_window.show()
-                
-        except Exception as e:
-            self._show_error("画像プレビュー表示中にエラーが発生しました", str(e))
-            if self.debug_mode:
-                import traceback
-                traceback.print_exc()
-            return False
-    
     def _open_hexdump_viewer(self, path: str) -> bool:
         """
         hexdumpビューアを開く
@@ -544,56 +523,3 @@ class FileActionHandler(ViewerDebugMixin):
         """
         if self.on_status_message:
             self.on_status_message(message)
-    
-    def open_preview_window(self, item_name: str, dual_view=False):
-        """
-        プレビューウィンドウを開く
-        
-        Args:
-            item_name: プレビューするアイテムの名前（カレントディレクトリからの相対パス）
-            dual_view: デュアルビューモードを有効にするかどうか
-        """
-        try:
-            # 遅延インポートを使用して循環インポートを回避
-            from app.viewer.widgets.preview.window import ImagePreviewWindow
-            
-            if self.on_status_message:
-                self.on_status_message(f"プレビューウィンドウを開きます: {item_name}")
-            
-            # 現在のディレクトリを含む相対パスを生成
-            current_dir = self.archive_manager.current_directory
-            if (current_dir):
-                # カレントディレクトリがある場合は結合
-                full_item_path = os.path.join(current_dir, item_name).replace('\\', '/')
-            else:
-                # カレントディレクトリが空の場合はそのまま
-                full_item_path = item_name
-                
-            self.debug_info(f"プレビュー用の相対パス: {full_item_path}")
-            
-            # プレビューウィンドウを作成（相対パスも渡す）
-            preview = ImagePreviewWindow(
-                parent=self.parent_widget,
-                archive_manager=self.archive_manager,
-                initial_path=full_item_path,
-                dual_view=dual_view
-            )
-            
-            # プレビューウィンドウを表示
-            preview.show()
-            
-            if self.debug_mode:
-                log_print(INFO, f"プレビューウィンドウが開かれました: {item_name}")
-                
-            return preview
-            
-        except Exception as e:
-            if self.debug_mode:
-                log_print(ERROR, f"プレビューウィンドウの表示に失敗しました: {e}", trace=True)
-            else:
-                log_print(ERROR, f"プレビューウィンドウの表示に失敗しました: {e}")
-                
-            if self.on_status_message:
-                self.on_status_message(f"エラー: プレビューウィンドウの表示に失敗しました")
-                
-            return None
