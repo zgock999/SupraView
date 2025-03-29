@@ -169,7 +169,7 @@ class FileActionHandler(ViewerDebugMixin):
         Returns:
             bool: 成功したかどうか
         """
-        # サムネイル生成スレッドを確実に停止させる
+        # サムネイル生成スレッドを確実に停止させる - フォルダ移動時なのでキャンセルは必要
         self._wait_for_thumbnail_threads()
         
         # 最初のみ許可される絶対パス（ドロップ/オープン時）
@@ -252,10 +252,10 @@ class FileActionHandler(ViewerDebugMixin):
         Returns:
             bool: 処理に成功したかどうか
         """
-        # サムネイル生成スレッドを確実に停止させる
-        self._wait_for_thumbnail_threads()
-        
         if entry.type == EntryType.DIRECTORY or entry.type == EntryType.ARCHIVE:
+            # ディレクトリの場合は移動するのでサムネイル生成を停止する
+            self._wait_for_thumbnail_threads()
+            
             # ディレクトリの場合は移動
             try:
                 # ステータスメッセージを更新（読み込み中）

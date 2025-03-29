@@ -247,9 +247,9 @@ class FileListView(QListView):
         フォルダが変更されたときの処理
         既存のサムネイル生成タスクをキャンセルします。
         """
-        # 進行中のサムネイル生成タスクをキャンセル
+        # 進行中のサムネイル生成タスクをキャンセル - 明示的キャンセルとして指定
         if hasattr(self, 'thumbnail_generator'):
-            self.thumbnail_generator.cancel_current_task()
+            self.thumbnail_generator.cancel_current_task(explicit_cancel=True)
             if self.debug_mode:
                 log_print(INFO, "ディレクトリ変更: すべてのサムネイル生成タスクをキャンセルしました")
         

@@ -133,8 +133,14 @@ class ThumbnailGenerator:
         # ファイル種別ごとのデフォルトアイコンを初期化
         self._init_default_icons()
         
-        # キャンセル状態の追跡（追加）
+        # キャンセル状態の追跡
         self._is_cancelling = False
+        
+        # 明示的なキャンセルフラグを追加（フォーカス移動によるキャンセル防止用）
+        self._explicit_cancel_requested = False
+        
+        # コンテキスト情報を初期化
+        self._context_current_directory = None
         
         if self.debug_mode:
             log_print(DEBUG, f"ThumbnailGeneratorを初期化しました。サポート拡張子: {SUPPORTED_EXTENSIONS}")
@@ -159,16 +165,23 @@ class ThumbnailGenerator:
         _, ext = os.path.splitext(filename.lower())
         return ext in SUPPORTED_EXTENSIONS
     
-    def cancel_current_task(self):
+    def cancel_current_task(self, explicit_cancel=True):
         """
         現在のサムネイル生成タスクをキャンセル
+        
+        Args:
+            explicit_cancel: 明示的なキャンセル要求かどうか。Trueの場合は完全キャンセル、
+                            Falseの場合はフォーカス移動などの一時的な中断と見なす
         """
-        # キャンセル状態を設定（追加）
+        # 明示的なキャンセル要求かどうかを記録
+        self._explicit_cancel_requested = explicit_cancel
+        
+        # キャンセル状態を設定
         self._is_cancelling = True
         
         if self.current_task_id:
             if self.debug_mode:
-                log_print(DEBUG, f"サムネイル生成タスク {self.current_task_id} をキャンセルします")
+                log_print(DEBUG, f"サムネイル生成タスク {self.current_task_id} をキャンセルします (明示的: {explicit_cancel})")
             
             # ワーカーマネージャを通じてタスクをキャンセル
             self.worker_manager.cancel_task(self.current_task_id)
@@ -177,23 +190,24 @@ class ThumbnailGenerator:
         # 抽出タスクもキャンセル
         if self.extraction_task_id:
             if self.debug_mode:
-                log_print(DEBUG, f"ファイル抽出タスク {self.extraction_task_id} をキャンセルします")
+                log_print(DEBUG, f"ファイル抽出タスク {self.extraction_task_id} をキャンセルします (明示的: {explicit_cancel})")
             
             self.worker_manager.cancel_task(self.extraction_task_id)
             self.extraction_task_id = None
         
-        # 実行中の全サムネイル生成タスクをキャンセル（重要な改善）
+        # 実行中の全サムネイル生成タスクをキャンセル
         self.worker_manager.cancel_all_tasks()
-        log_print(INFO, "すべてのサムネイル関連タスクをキャンセルしました")
+        log_print(INFO, f"すべてのサムネイル関連タスクをキャンセルしました (明示的: {explicit_cancel})")
         
-        # 現在のコンテキスト情報を記録（コンテキスト変更検出用）
-        self._context_current_directory = None
+        # 明示的なキャンセルの場合のみコンテキストディレクトリをクリア
+        if explicit_cancel:
+            self._context_current_directory = None
         
         # キャンセル処理が完了したことを示すために少し待機
         import time
         time.sleep(0.05)  # 50ms待機
         
-        # キャンセル状態をリセット（追加）
+        # キャンセル状態をリセット
         self._is_cancelling = False
     
     def generate_thumbnails(
@@ -216,7 +230,7 @@ class ThumbnailGenerator:
             thumbnail_size: サムネイルのサイズ
             current_directory: 現在表示中のディレクトリパス（相対パス）
         """
-        # 引数の検証とデバッグ情報（追加）
+        # 引数の検証とデバッグ情報
         if not archive_manager:
             log_print(ERROR, "archive_managerがNoneです。サムネイル生成を中止します。")
             if on_all_completed:
@@ -235,16 +249,25 @@ class ThumbnailGenerator:
                 on_all_completed()
             return
             
-        # キャンセル中の場合はすぐに完了とする（追加）
+        # キャンセル中の場合はすぐに完了とする
         if self._is_cancelling:
             if on_all_completed:
                 on_all_completed()
             return
         
-        # 既存のタスクをキャンセル
-        self.cancel_current_task()
+        # 明示的にキャンセル要求されていない場合（フォーカス移動などによる）は、
+        # 新しいサムネイル生成を開始する前に既存のタスクをキャンセルする
+        if self._explicit_cancel_requested:
+            # 明示的なキャンセル要求があった場合は、既存のタスクをキャンセルして新しいタスクを開始
+            self.cancel_current_task(explicit_cancel=True)
+        else:
+            # フォーカス移動などによるキャンセルの場合は、明示的なキャンセルではないことを指定
+            self.cancel_current_task(explicit_cancel=False)
         
-        # 現在のコンテキスト情報を保存（重要: コンテキスト変更検出用）
+        # 明示的キャンセルフラグをリセット
+        self._explicit_cancel_requested = False
+        
+        # 現在のコンテキスト情報を保存（コンテキスト変更検出用）
         self._context_current_directory = current_directory
         
         # 画像ファイルだけをフィルタリング
@@ -277,12 +300,12 @@ class ThumbnailGenerator:
                 # デバッグ出力を強化
                 log_print(INFO, f"ファイル '{filename}' の抽出完了（{len(file_data)}バイト）、サムネイル生成を開始")
                 
-                # キャンセル中の場合は処理しない（追加）
+                # キャンセル中の場合は処理しない
                 if self._is_cancelling:
                     return
                 
-                # 抽出後にコンテキストが変更されていないかチェック（重要な改善）
-                if current_directory != self._context_current_directory:
+                # 抽出後にコンテキストが変更されていないかチェック - 明示的キャンセルの場合のみ厳密にチェック
+                if self._explicit_cancel_requested and current_directory != self._context_current_directory:
                     log_print(WARNING, f"ディレクトリが変更されたためサムネイル生成をスキップします: {filename}")
                     return
                 
@@ -320,7 +343,7 @@ class ThumbnailGenerator:
                 log_print(ERROR, f"ファイル抽出エラー: {error_info[1]}")
                 self.extraction_task_id = None  # タスクIDをクリア
                 
-                # キャンセルされた場合でも完了コールバックを呼び出す（追加）
+                # キャンセルされた場合でも完了コールバックを呼び出す
                 if self._is_cancelling and on_all_completed:
                     on_all_completed()
             
@@ -463,8 +486,8 @@ class ThumbnailGenerator:
             filename: ファイル名（明示的に渡す）
             context_directory: 生成時のディレクトリコンテキスト
         """
-        # コンテキスト変更をチェック - 別のディレクトリに移動していたら結果を無視（重要な改善）
-        if context_directory != self._context_current_directory:
+        # コンテキスト変更をチェック - 明示的キャンセルの場合のみ厳密にチェック
+        if self._explicit_cancel_requested and context_directory != self._context_current_directory:
             log_print(INFO, f"ディレクトリが変更されたため結果を破棄します: {filename} (元:{context_directory}, 現在:{self._context_current_directory})")
             return
             
