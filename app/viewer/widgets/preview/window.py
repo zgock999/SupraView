@@ -152,6 +152,9 @@ class ImagePreviewWindow(QMainWindow):
         self.event_handler.register_callback('toggle_dual_view', self.toggle_dual_view)
         self.event_handler.register_callback('toggle_shift_mode', self.toggle_shift_mode)
         
+        # 超解像処理のコールバックを追加
+        self.event_handler.register_callback('apply_superres', self._on_superres)
+        
         # ウィンドウ関連
         self.event_handler.register_callback('close', self.close)
         self.event_handler.register_callback('show_navigation', self._show_navigation_bar)
@@ -826,6 +829,14 @@ class ImagePreviewWindow(QMainWindow):
             # 基底クラスのcloseEventを呼び出し
             super().closeEvent(event)
 
+    def _on_superres(self):
+        """超解像処理の実行"""
+        # 親ウィンドウのimage_handlerがあるかどうか確認
+        success = self.image_handler.run_superres()
+        if success:
+            log_print(INFO, "超解像処理を開始しました")
+        else:
+            log_print(ERROR, "超解像処理の実行に失敗しました")
 
 # 単体テスト用のコード
 if __name__ == "__main__":

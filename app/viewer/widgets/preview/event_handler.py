@@ -50,7 +50,7 @@ class EventHandler:
             # 代替キー設定
             Qt.Key_N: 'next_image',                # 次の画像へ (代替キー)
             Qt.Key_P: 'prev_image',                # 前の画像へ (代替キー)
-            Qt.Key_Space: 'next_image',            # 次の画像へ (代替キー)
+            Qt.Key_Space: 'apply_superres',        # 超解像処理を適用 (スペースキー)
             
             # ウィンドウ操作
             Qt.Key_Q: 'close',                     # ウィンドウを閉じる
@@ -64,7 +64,8 @@ class EventHandler:
         # その他の代替キーも同様に
         self.rtl_key_mapping[Qt.Key_N] = 'prev_image'
         self.rtl_key_mapping[Qt.Key_P] = 'next_image'
-        self.rtl_key_mapping[Qt.Key_Space] = 'prev_image'
+        # スペースキーは超解像処理のままで変更しない
+        self.rtl_key_mapping[Qt.Key_Space] = 'apply_superres'
     
     def register_callback(self, action: str, callback: Callable) -> bool:
         """
@@ -116,6 +117,25 @@ class EventHandler:
                 # フルスクリーンでなければ無視
                 log_print(DEBUG, "フルスクリーンモードではないため、exit_fullscreenアクションは無視されます")
                 return False
+            
+            # 特別なケース: 超解像処理（スペースキー）
+            if action == 'apply_superres':
+                # 自動処理モードがオンになっている場合はスキップ
+                auto_process = False
+                
+                # 親ウィンドウが存在し、超解像処理マネージャが設定されているか確認
+                if hasattr(self.parent, 'sr_manager') and self.parent.sr_manager is not None:
+                    # 直接sr_managerプロパティがある場合
+                    if hasattr(self.parent.sr_manager, 'auto_process'):
+                        auto_process = self.parent.sr_manager.auto_process
+                # image_handler経由でsr_managerが設定されている場合
+                elif hasattr(self.parent, 'image_handler') and hasattr(self.parent.image_handler, 'sr_manager'):
+                    if hasattr(self.parent.image_handler.sr_manager, 'auto_process'):
+                        auto_process = self.parent.image_handler.sr_manager.auto_process
+                
+                if auto_process:
+                    log_print(INFO, "自動超解像処理モードが有効なため、手動での超解像実行はスキップされます")
+                    return False
             
             # 通常の処理: 登録されているコールバックを実行
             if action in self.callbacks:
@@ -230,7 +250,6 @@ class EventHandler:
             event: 発生したイベント
             
         Returns:
-            bool: イベントを処理した場合はTrue
         """
         event_type = event.type()
         

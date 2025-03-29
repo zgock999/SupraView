@@ -328,26 +328,45 @@ class PreviewContextMenu(QMenu):
         
         # 超解像マネージャが初期化中かどうか確認
         initializing = False
+        # 自動処理が有効かどうかを確認
+        auto_process = False
+        
         if has_sr_manager:
             # 直接sr_managerプロパティがある場合
             if hasattr(self.parent, 'sr_manager') and hasattr(self.parent.sr_manager, 'is_initializing'):
                 initializing = self.parent.sr_manager.is_initializing
+                # 自動処理モードを確認
+                if hasattr(self.parent.sr_manager, 'auto_process'):
+                    auto_process = self.parent.sr_manager.auto_process
             # image_handler経由でsr_managerを参照する場合
             elif hasattr(self.parent, 'image_handler') and hasattr(self.parent.image_handler, 'sr_manager'):
                 sr_manager = self.parent.image_handler.sr_manager
                 if hasattr(sr_manager, 'is_initializing'):
                     initializing = sr_manager.is_initializing
+                # 自動処理モードを確認
+                if hasattr(sr_manager, 'auto_process'):
+                    auto_process = sr_manager.auto_process
         
         # クリック位置に画像があるかどうか確認
         target_index = self._get_target_image_index()
         has_image = target_index is not None and hasattr(self.parent, 'image_handler') and self.parent.image_handler.is_image_loaded(target_index)
         
         # 条件に基づいてアクションの有効/無効を設定
-        enabled = has_sr_manager and not initializing and has_image
+        # 自動処理が有効な場合は、手動での超解像処理を無効にする
+        enabled = has_sr_manager and not initializing and has_image and not auto_process
         self.superres_action.setEnabled(enabled)
         
+        # 自動処理が有効な場合はメニュー項目のテキストを変更して説明を追加
+        if auto_process and has_sr_manager and has_image:
+            self.superres_action.setText("超解像処理を実行 (自動処理中)")
+            self.superres_action.setToolTip("自動処理モードが有効なため、手動実行は無効になっています")
+        else:
+            self.superres_action.setText("超解像処理を実行")
+            self.superres_action.setToolTip("")
+        
         # ログ出力
-        log_print(DEBUG, f"超解像メニュー状態更新: 有効={enabled}, マネージャ={has_sr_manager}, 初期化中={initializing if has_sr_manager else False}, 画像={has_image}, ターゲット={target_index}")
+        log_print(DEBUG, f"超解像メニュー状態更新: 有効={enabled}, マネージャ={has_sr_manager}, 初期化中={initializing if has_sr_manager else False}, "
+                         f"自動処理={auto_process if has_sr_manager else False}, 画像={has_image}, ターゲット={target_index}")
     
     def _get_target_image_index(self):
         """クリック位置に基づいて処理対象の画像インデックスを取得"""
@@ -554,53 +573,11 @@ class PreviewContextMenu(QMenu):
     
     def _on_superres(self):
         """超解像処理の実行"""
-        # カーソル位置の確認
-        from PySide6.QtGui import QCursor
-        current_pos = QCursor.pos()
-        
-        # クリック位置が不明な場合は現在のカーソル位置で更新
-        if self._click_position is None:
-            self._click_position = current_pos
-            log_print(DEBUG, f"超解像処理実行時にクリック位置を更新: x={current_pos.x()}, y={current_pos.y()}")
-        
-        # クリック位置から対象画像のインデックスを取得（詳細デバッグ情報を出力）
-        log_print(INFO, f"超解像処理: クリック位置 {self._click_position.x()}, {self._click_position.y()}")
-        
-        target_index = self._get_target_image_index()
-        
-        if target_index is not None:
-            log_print(INFO, f"画像インデックス {target_index} に対して超解像処理を実行します")
-            
-            # 親ウィンドウのプロパティを確認（デバッグ用）
-            if hasattr(self.parent, 'image_model'):
-                is_dual = self.parent.image_model.is_dual_view() if hasattr(self.parent.image_model, 'is_dual_view') else "不明"
-                is_rtl = self.parent.image_model.is_right_to_left() if hasattr(self.parent.image_model, 'is_right_to_left') else "不明"
-                log_print(INFO, f"親ウィンドウの状態: dual_view={is_dual}, right_to_left={is_rtl}")
-            
-            # 親ウィンドウのimage_handlerがあるかどうか確認
-            if hasattr(self.parent, 'image_handler') and self.parent.image_handler:
-                # この画像が実際に読み込まれているか確認
-                if hasattr(self.parent.image_handler, 'is_image_loaded') and self.parent.image_handler.is_image_loaded(target_index):
-                    # image_handlerのrun_superresメソッドを呼び出す
-                    if hasattr(self.parent.image_handler, 'run_superres'):
-                        success = self.parent.image_handler.run_superres(target_index)
-                        if success:
-                            log_print(INFO, f"超解像処理を開始しました: index={target_index}")
-                        else:
-                            log_print(ERROR, f"超解像処理の実行に失敗しました: index={target_index}")
-                    else:
-                        log_print(ERROR, "image_handlerにrun_superresメソッドがありません")
-                else:
-                    log_print(ERROR, f"インデックス {target_index} の画像は読み込まれていません")
-            else:
-                # 代替方法: 親ウィンドウに直接run_superresメソッドがある場合
-                if hasattr(self.parent, 'run_superres'):
-                    self.parent.run_superres(target_index)
-                    log_print(INFO, f"親ウィンドウのrun_superresメソッドを呼び出しました: index={target_index}")
-                else:
-                    log_print(ERROR, "超解像処理を実行する方法がありません")
+        if hasattr(self.parent, '_on_superres'):
+            self.parent._on_superres()
+            log_print(INFO, "親ウィンドウの_on_superresメソッドを呼び出しました")
         else:
-            log_print(ERROR, "処理対象の画像インデックスが取得できません")
+            log_print(ERROR, "超解像処理を実行する方法がありません")
     
     def _on_rotate_left(self):
         """左回転処理"""

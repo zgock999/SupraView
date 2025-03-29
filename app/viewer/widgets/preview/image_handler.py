@@ -56,6 +56,15 @@ class ImageHandler:
         # 超解像マネージャへの参照（初期はNone）
         self.sr_manager = None
         
+        # 超解像処理の遅延リクエスト用タイマー
+        self.sr_delay_timer = QTimer()
+        self.sr_delay_timer.setSingleShot(True)
+        self.sr_delay_timer.setInterval(100)  # 100ms遅延
+        self.sr_delay_timer.timeout.connect(self._process_delayed_superres)
+        
+        # 遅延リクエスト用のキュー
+        self._delayed_sr_requests = {}  # {index: current_path}
+        
         log_print(DEBUG, f"ImageHandler: 初期化完了 (モデル参照: {self.image_model is not None})")
     
     def setup_image_areas(self, image_areas: List[QScrollArea]):
@@ -175,74 +184,10 @@ class ImageHandler:
                         self.sr_manager.cancel_superres(old_request_id)
                         log_print(DEBUG, f"既存の超解像リクエスト {old_request_id} をキャンセルしました")
                 
-                # 超解像処理のリクエスト
+                # 超解像処理のリクエスト - 自動処理が有効な場合は遅延リクエスト
                 if self.sr_manager and numpy_array is not None and self.sr_manager.auto_process:
-                    # 超解像処理用のコールバックを定義
-                    def on_superres_completed(request_id, processed_array):
-                        """超解像処理完了時のコールバック"""
-                        try:
-                            # 対応するリクエストIDがどの画像に関連するか確認
-                            current_request_id = self.image_model.get_sr_request(index)
-                            
-                            # 現在の画像とリクエストIDが一致するかチェック
-                            target_index = index
-                            if current_request_id == request_id:
-                                # リクエストIDが一致する場合は通常通り処理
-                                log_print(INFO, f"画像 {index} の超解像処理が完了しました: {request_id}")
-                            else:
-                                # 一致しない場合、もう一方の画像をチェック（デュアルビューの場合）
-                                other_index = 1 if index == 0 else 0
-                                other_request_id = self.image_model.get_sr_request(other_index)
-                                
-                                if other_request_id == request_id:
-                                    # もう一方の画像のリクエストと一致した場合は、インデックスを切り替え
-                                    log_print(INFO, f"もう一方の画像 {other_index} の超解像処理が完了しました: {request_id}")
-                                    target_index = other_index
-                                else:
-                                    # どちらの画像とも一致しない場合（古いリクエストなど）
-                                    log_print(WARNING, f"リクエストIDが一致しません: current={current_request_id}, other={other_request_id}, callback={request_id}")
-                                    return
-                            
-                            # 処理結果がNoneでないことを確認
-                            if processed_array is None:
-                                log_print(ERROR, f"超解像処理が失敗しました: {request_id}")
-                                return
-                            
-                            # 結果を画像モデルに設定（これによりピクスマップも再構築され、sr_requestもクリアされる）
-                            success = self.image_model.set_sr_array(target_index, processed_array)
-                            
-                            if success:
-                                log_print(INFO, f"超解像処理結果を受け取りました: index={target_index}, request_id={request_id}")
-                                
-                                # 表示を更新
-                                if target_index < len(self.image_areas) and self.image_areas[target_index]:
-                                    # 更新されたピクスマップを取得
-                                    pixmap = self.image_model.get_pixmap(target_index)
-                                    if pixmap:
-                                        # 画像をエリアに設定
-                                        self._set_image_to_area(pixmap, target_index)
-                                        log_print(INFO, f"画像エリア {target_index} の表示を更新しました")
-                                
-                                # 画像情報をステータスバーに表示
-                                self._update_status_info()
-                            else:
-                                log_print(ERROR, f"超解像処理結果の適用に失敗しました: {request_id}")
-                            
-                        except Exception as e:
-                            log_print(ERROR, f"超解像処理コールバック中にエラー: {e}")
-                            import traceback
-                            log_print(DEBUG, traceback.format_exc())
-            
-                    # 超解像処理をリクエスト
-                    try:
-                        request_id = self.sr_manager.add_image_to_superres(numpy_array, on_superres_completed)
-                        # リクエストIDをモデルに保存
-                        self.image_model.set_sr_request(index, request_id)
-                        log_print(INFO, f"超解像処理をリクエストしました: index={index}, request_id={request_id}")
-                    except Exception as e:
-                        log_print(ERROR, f"超解像処理リクエスト中にエラー: {e}")
-                        import traceback
-                        log_print(DEBUG, traceback.format_exc())
+                    # 遅延リクエストを登録（現在のパスを記録）
+                    self._schedule_delayed_superres(index, path)
             
             # 画像を表示
             self._set_image_to_area(pixmap, index)
@@ -270,6 +215,44 @@ class ImageHandler:
             import traceback
             log_print(DEBUG, traceback.format_exc())
             return False
+    
+    def _schedule_delayed_superres(self, index: int, path: str):
+        """
+        超解像処理リクエストを遅延スケジュールする（画像切り替え時の連続リクエスト防止）
+        
+        Args:
+            index: 画像インデックス
+            path: 画像パス
+        """
+        # 現在のリクエストを記録
+        self._delayed_sr_requests[index] = path
+        log_print(DEBUG, f"超解像処理の遅延リクエストを登録: index={index}, path={os.path.basename(path)}")
+        
+        # 遅延タイマーを開始（すでに開始されている場合は再起動）
+        self.sr_delay_timer.start()
+    
+    def _process_delayed_superres(self):
+        """
+        遅延リクエストされた超解像処理を実行する（タイマーコールバック）
+        画像が同じままであれば処理を実行、そうでなければスキップする
+        """
+        # 登録されていたリクエストを処理
+        for index, path in list(self._delayed_sr_requests.items()):
+            # 現在の画像パスを取得
+            current_path = None
+            if self.image_model and self.image_model.has_image(index):
+                current_path = self.image_model.get_path(index)
+            
+            # 画像パスが変わっていなければ超解像処理を実行
+            if current_path and current_path == path:
+                log_print(DEBUG, f"遅延された超解像処理を実行: index={index}, path={os.path.basename(path)}")
+                self._process_single_image(index)
+            else:
+                log_print(DEBUG, f"画像が変更されたため超解像処理をスキップ: index={index}, "
+                               f"requested={os.path.basename(path)}, current={os.path.basename(current_path) if current_path else 'None'}")
+        
+        # 処理済みのリクエストをクリア
+        self._delayed_sr_requests.clear()
     
     def _set_image_to_area(self, pixmap: QPixmap, index: int):
         """
@@ -438,12 +421,12 @@ class ImageHandler:
             
         return success
     
-    def run_superres(self, index: int) -> bool:
+    def run_superres(self, index: int = None) -> bool:
         """
         手動で超解像処理を実行
         
         Args:
-            index: 処理する画像のインデックス
+            index: 処理する画像のインデックス（Noneの場合、モードに応じて自動選択）
             
         Returns:
             bool: 処理リクエストに成功したかどうか
@@ -454,6 +437,46 @@ class ImageHandler:
             self._show_status_message("超解像処理の準備ができていません")
             return False
         
+        # 遅延リクエストをキャンセル（手動実行が優先）
+        if self.sr_delay_timer.isActive():
+            self.sr_delay_timer.stop()
+        self._delayed_sr_requests.clear()
+        
+        # インデックスが指定されていない場合、現在のモードに応じて処理対象を決定
+        if index is None:
+            # デュアルモードかどうかをチェック
+            is_dual_mode = False
+            if hasattr(self.image_model, 'is_dual_view'):
+                is_dual_mode = self.image_model.is_dual_view()
+            
+            if is_dual_mode:
+                # デュアルモードの場合は両方の画像を処理
+                log_print(INFO, "デュアルモード: 両方の画像に対して超解像処理を実行します")
+                
+                # 両方の画像にそれぞれ超解像処理を実行（少なくとも1つ成功すればTrueを返す）
+                success1 = self._process_single_image(0)
+                success2 = self._process_single_image(1)
+                
+                return success1 or success2
+            else:
+                # シングルモードの場合は画像0のみを処理
+                log_print(INFO, "シングルモード: 画像0に対して超解像処理を実行します")
+                return self._process_single_image(0)
+        else:
+            # インデックスが指定されている場合は、その画像のみを処理
+            log_print(INFO, f"指定されたインデックス {index} の画像に対して超解像処理を実行します")
+            return self._process_single_image(index)
+    
+    def _process_single_image(self, index: int) -> bool:
+        """
+        指定インデックスの画像に対して超解像処理を実行
+        
+        Args:
+            index: 処理する画像のインデックス
+            
+        Returns:
+            bool: 処理リクエストに成功したかどうか
+        """
         # 画像が読み込まれているか確認
         if not self.image_model.has_image(index):
             log_print(ERROR, f"インデックス {index} に画像が読み込まれていません")
@@ -476,7 +499,8 @@ class ImageHandler:
                 log_print(DEBUG, f"既存の超解像リクエスト {old_request_id} をキャンセルしました")
         
         # 処理状態をユーザーに通知
-        self._show_status_message(f"超解像処理を開始しています...")
+        filename = os.path.basename(path)
+        self._show_status_message(f"超解像処理を開始しています: {filename}...")
         
         # 超解像処理用のコールバックを定義
         def on_superres_completed(request_id, processed_array):
@@ -548,8 +572,6 @@ class ImageHandler:
             # リクエストIDをモデルに保存
             self.image_model.set_sr_request(index, request_id)
             
-            # ファイル名を取得してユーザーに通知
-            filename = os.path.basename(path)
             log_print(INFO, f"超解像処理をリクエストしました: index={index}, request_id={request_id}, file={filename}")
             self._show_status_message(f"超解像処理を開始しました: {filename}")
             
