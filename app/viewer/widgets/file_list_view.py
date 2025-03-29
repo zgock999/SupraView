@@ -65,7 +65,7 @@ class FileListView(QListView):
         # プラットフォームに応じたグリッドサイズ調整
         if platform.system() == 'Linux':
             # Linux環境ではより大きな垂直スペースを確保
-            self.setGridSize(QSize(120, 160))  # より大きな垂直スペースを確保
+            self.setGridSize(QSize(120, 140))  # 十分な高さを確保してアイコンとテキストが表示されるようにする
         else:
             # Windows/macOSなど他のプラットフォーム
             self.setGridSize(QSize(120, 140))
@@ -89,7 +89,8 @@ class FileListView(QListView):
                     color: #333;
                     border-radius: 5px;
                     padding: 5px;
-                    padding-top: 100px;  /* アイコンの下にテキスト配置のための十分なスペース */
+                    padding-top: 2px;  /* アイコンとテキストの関係を調整 */
+                    margin-bottom: 10px; /* テキスト表示のための余白確保 */
                     text-align: center;
                 }
                 QListView::item:selected {
@@ -498,7 +499,10 @@ class FileListView(QListView):
                 index = self.model().index(row, 0)
                 item = self.model().itemFromIndex(index)
                 if item:
+                    # アイコンの下にテキストを配置
                     item.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+                    # テキスト表示位置の微調整
+                    item.setSizeHint(QSize(140, 160))
         else:
             # Windows/macOSなど他のプラットフォーム
             self.setFlow(QListView.LeftToRight)

@@ -5,9 +5,9 @@
 """
 
 import os
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QStyle
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QStyle, QApplication
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QSize
-from PySide6.QtGui import QEnterEvent, QFont, QIcon
+from PySide6.QtGui import QEnterEvent, QFont, QIcon, QCursor
 
 from logutils import log_print, INFO, DEBUG
 
@@ -40,6 +40,9 @@ class NavigationBar(QWidget):
         # 右から左モード（デュアルモードで右が第一画面の時）
         self._right_to_left = False
         
+        # 検出エリアの割合（下部からの割合）- 感度を上げるために25%に設定
+        self._detection_area_ratio = 0.25
+        
         # ウィジェットの透明度を設定
         self.setWindowOpacity(0.9)
         
@@ -66,6 +69,12 @@ class NavigationBar(QWidget):
         
         # 親ウィンドウに対する相対位置を設定
         self._set_position()
+        
+        # マウス位置更新用タイマー（マウスが動かない場合でも定期的にチェック）
+        self._check_mouse_timer = QTimer(self)
+        self._check_mouse_timer.setInterval(500)  # 500ミリ秒ごとにチェック
+        self._check_mouse_timer.timeout.connect(self._check_mouse_position)
+        self._check_mouse_timer.start()
     
     def _setup_ui(self):
         """UIコンポーネントをセットアップ"""
@@ -296,12 +305,14 @@ class NavigationBar(QWidget):
     
     def show_bar(self):
         """バーを表示"""
-        if not self._visible:
+        if not self._visible or not self.isVisible():
             # 表示前に位置を更新
             self._set_position()  # 位置を再設定
             
             self._visible = True
             self.show()
+            # UI更新を即時反映
+            QApplication.processEvents()
             log_print(DEBUG, "ナビゲーションバーを表示")
         
         # 自動非表示タイマーをリセット
@@ -310,8 +321,21 @@ class NavigationBar(QWidget):
     def _hide_bar(self):
         """バーを非表示"""
         if self._visible:
+            # マウス位置を再確認して、まだ検出エリア内にある場合は非表示にしない
+            if self.parentWidget():
+                mouse_pos = self.parentWidget().mapFromGlobal(QCursor.pos())
+                parent_height = self.parentWidget().height()
+                detection_area_height = int(parent_height * self._detection_area_ratio)
+                
+                if (parent_height - detection_area_height) < mouse_pos.y() < parent_height:
+                    # まだ検出エリア内にいるので、タイマーをリセットして表示を維持
+                    self._hide_timer.start(1500)
+                    return
+            
             self._visible = False
             self.hide()
+            # UI更新を即時反映
+            QApplication.processEvents()
             log_print(DEBUG, "ナビゲーションバーを非表示")
     
     def set_bottom_margin(self, margin):
@@ -339,6 +363,24 @@ class NavigationBar(QWidget):
             
             log_print(DEBUG, f"マージン調整: ({x}, {y}), サイズ: {width}x{height}, マージン: {margin}")
     
+    def _check_mouse_position(self):
+        """定期的にマウス位置をチェックし、必要に応じてナビゲーションバーを表示/非表示"""
+        if not self.parentWidget():
+            return
+        
+        # 親ウィジェット上でのマウス位置を取得
+        mouse_pos = self.parentWidget().mapFromGlobal(QCursor.pos())
+        parent_height = self.parentWidget().height()
+        detection_area_height = int(parent_height * self._detection_area_ratio)
+        
+        # マウスが検出エリア内にある場合はバーを表示
+        if (parent_height - detection_area_height) < mouse_pos.y() < parent_height:
+            if not self._visible or not self.isVisible():
+                self.show_bar()
+        elif self._visible and not self._hide_timer.isActive():
+            # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始
+            self._hide_timer.start(1500)  # 1.5秒後に非表示
+    
     def eventFilter(self, watched, event):
         """
         親ウィジェットのイベントをフィルタリング
@@ -351,16 +393,19 @@ class NavigationBar(QWidget):
             イベントを処理した場合はTrue
         """
         # マウス移動イベントを処理
-        if event.type() == QEvent.MouseMove:
+        if event.type() == QEvent.MouseMove and self.parentWidget():
             parent_height = self.parentWidget().height()
-            detection_area_height = int(parent_height * 0.2)  # 下部20%を検出エリアとする
+            detection_area_height = int(parent_height * self._detection_area_ratio)
             mouse_y = event.pos().y()
             
             # マウスが検出エリア内にある場合はバーを表示
             if (parent_height - detection_area_height) < mouse_y < parent_height:
-                self.show_bar()
-            else:
-                # エリア外の場合は一定時間後に非表示
+                # 明示的にshow_barを呼び出し
+                if not self._visible or not self.isVisible():
+                    self.show_bar()
+                    log_print(DEBUG, f"マウス検出: y={mouse_y}, 検出エリア: {parent_height-detection_area_height}-{parent_height}")
+            elif self._visible and not self._hide_timer.isActive():
+                # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始
                 self._hide_timer.start(1500)  # 1.5秒後に非表示
         
         # イベントはそのまま親ウィジェットに渡す
