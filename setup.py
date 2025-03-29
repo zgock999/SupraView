@@ -1,33 +1,41 @@
-from setuptools import setup, find_packages
+import setuptools
+import os
 
-setup(
+# READMEファイルがあれば読み込む
+long_description = ""
+if os.path.exists("README.md"):
+    with open("README.md", "r", encoding="utf-8") as fh:
+        long_description = fh.read()
+
+# パッケージ設定
+setuptools.setup(
     name="supraview",
     version="0.1.0",
-    packages=find_packages(),
-    install_requires=[
-        "numpy>=1.20.0",
-        "opencv-python>=4.5.0",
-        "Pillow>=8.0.0",
-    ],
-    extras_require={
-        "viewer": [
-            "dash>=2.0.0",
-            "dash-bootstrap-components>=1.0.0",
-        ],
-        "dev": [
-            "pytest>=6.0.0",
-        ],
-    },
-    author="SupraView開発者",
-    author_email="example@example.com",
-    description="複数の画像フォーマットに対応した画像ビューワーアプリケーション",
-    keywords="image, viewer, decoder, mag, retro",
+    author="SupraView Team",
+    author_email="your-email@example.com",
+    description="A versatile viewer application",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     url="https://github.com/yourusername/supraview",
+    project_urls={
+        "Bug Tracker": "https://github.com/yourusername/supraview/issues",
+    },
     classifiers=[
-        "Development Status :: 3 - Alpha",
-        "Intended Audience :: End Users/Desktop",
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
     ],
-    python_requires=">=3.7",
+    package_dir={"": "."},
+    packages=setuptools.find_packages(where="."),
+    python_requires=">=3.8",
+    install_requires=[
+        "PySide6>=6.0.0",
+        # プロジェクトの他の依存関係をここに追加
+    ],
+    entry_points={
+        "console_scripts": [
+            "supraview=app.main:main",
+        ],
+    },
+    include_package_data=True,
 )
