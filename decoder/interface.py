@@ -29,6 +29,7 @@ from decoder.common import DecodingError
 try:
     from decoder.mag_decoder import MAGImageDecoder
     from decoder.cv2_decoder import CV2ImageDecoder
+    from decoder.gif_decoder import GIFImageDecoder  # GIFデコーダーを追加
     # 将来的に他のデコーダーが実装されたらここに追加
 except ImportError as e:
     log_print(WARNING, f"一部のデコーダーのインポートに失敗しました: {e}")
@@ -49,10 +50,9 @@ class DecoderManager:
         # 利用可能なデコーダーを登録
         self._register_decoders()
         
-        # サポート形式がない場合のフォールバック（エラー防止）
+        # フォールバック処理を削除 - バグ発見を早めるため
         if not self._ext_to_decoder:
-            log_print(WARNING, "有効なデコーダーが登録されていません。基本的な画像フォーマットをサポート対象に追加します。")
-            self._add_fallback_extensions()
+            log_print(WARNING, "有効なデコーダーが登録されていません。対応するデコーダーをインポートしてください。")
         
         log_print(INFO, f"デコーダーマネージャーが初期化されました。サポート形式: {', '.join(self.get_supported_extensions())}")
     
@@ -77,6 +77,14 @@ class DecoderManager:
             log_print(DEBUG, "CV2ImageDecoderを登録候補に追加しました")
         except ImportError as e:
             log_print(WARNING, f"CV2ImageDecoderが見つかりません: {e}")
+        
+        # GIFImageDecoderの登録 - 新規追加
+        try:
+            from decoder.gif_decoder import GIFImageDecoder
+            decoder_classes.append(GIFImageDecoder)
+            log_print(DEBUG, "GIFImageDecoderを登録候補に追加しました")
+        except ImportError as e:
+            log_print(WARNING, f"GIFImageDecoderが見つかりません: {e}")
         
         log_print(DEBUG, f"登録候補のデコーダー数: {len(decoder_classes)}")
         
@@ -126,41 +134,6 @@ class DecoderManager:
                 log_print(ERROR, f"デコーダー {decoder_class.__name__} の登録中にエラーが発生しました: {e}")
                 import traceback
                 traceback.print_exc()
-    
-    def _add_fallback_extensions(self):
-        """
-        サポート形式が見つからない場合のフォールバック
-        基本的な画像形式を手動で追加して機能停止を防ぐ
-        """
-        # 共通して使われる画像フォーマットを追加
-        common_formats = [
-            '.jpg', '.jpeg', '.png', '.gif', '.bmp', 
-            '.webp', '.tiff', '.tif', '.ico'
-        ]
-        
-        for ext in common_formats:
-            # MAGデコーダーがあれば、それをデフォルトとして使用
-            decoder_class = None
-            try:
-                decoder_class = MAGImageDecoder
-            except NameError:
-                try:
-                    decoder_class = CV2ImageDecoder
-                except NameError:
-                    pass
-            
-            # デコーダーが見つかったら登録
-            if decoder_class and issubclass(decoder_class, ImageDecoder):
-                self._ext_to_decoder[ext] = decoder_class
-                
-                # デコーダー対応表にも追加
-                if decoder_class not in self._decoders:
-                    self._decoders[decoder_class] = []
-                self._decoders[decoder_class].append(ext)
-                
-                log_print(DEBUG, f"フォールバック: 拡張子 '{ext}' を {decoder_class.__name__} に登録しました")
-        
-        log_print(INFO, f"フォールバック設定を適用しました。サポート形式: {', '.join(self.get_supported_extensions())}")
     
     def get_supported_extensions(self) -> List[str]:
         """

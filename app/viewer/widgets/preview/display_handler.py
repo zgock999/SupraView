@@ -23,10 +23,14 @@ class ImageScrollArea(QScrollArea):
         self.setWidgetResizable(True)
         self.setAlignment(Qt.AlignCenter)
         
+        # 背景色を黒に設定
+        self.setStyleSheet("background-color: black;")
+        
         # 画像ラベルの作成
         self.image_label = QLabel("画像が読み込まれていません")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.image_label.setStyleSheet("background-color: black;")
         
         # スクロールエリアにラベルを設定
         self.setWidget(self.image_label)
@@ -298,36 +302,50 @@ class DisplayHandler:
         if not self._image_model:
             return
         
-        log_print(DEBUG, f"画像エリアの表示モード更新: fit={self.is_fit_to_window_mode()}, zoom={self.get_zoom_factor()}")
+        # 現在の表示設定を保存
+        current_fit_mode = self.is_fit_to_window_mode()
+        current_zoom = self.get_zoom_factor()
+        
+        log_print(DEBUG, f"画像エリアの表示モード更新: fit={current_fit_mode}, zoom={current_zoom}")
         
         # 画像エリア0（左/単一）の更新
         if len(self._image_areas) > 0 and self._image_areas[0]:
             # 表示モードの設定を明示的に更新
-            self._image_areas[0]._fit_to_window = self.is_fit_to_window_mode()
-            self._image_areas[0]._zoom_factor = self.get_zoom_factor()
+            self._image_areas[0]._fit_to_window = current_fit_mode
+            self._image_areas[0]._zoom_factor = current_zoom
             
             pixmap = self._image_model.get_pixmap(0)
             if pixmap:
-                self._image_areas[0].set_pixmap(pixmap)
-                self._image_areas[0].set_fit_to_window(self.is_fit_to_window_mode())
-                # 明示的に再描画を促す
-                self._image_areas[0]._adjust_image_size()
-                log_print(DEBUG, f"画像エリア0に画像を設定: fit={self.is_fit_to_window_mode()}")
+                # pixmapを設定
+                self._image_areas[0]._current_pixmap = pixmap
+                
+                # 表示モードに応じて適切なメソッドを呼び出し
+                if current_fit_mode:
+                    self._image_areas[0].set_fit_to_window(True)
+                else:
+                    self._image_areas[0].set_zoom(current_zoom)
+                
+                log_print(DEBUG, f"画像エリア0に画像を設定: fit={current_fit_mode}")
                 
         # 画像エリア1（右）の更新（デュアルモードの場合）
         if len(self._image_areas) > 1 and self._image_areas[1]:
             # 表示モードの設定を明示的に更新
-            self._image_areas[1]._fit_to_window = self.is_fit_to_window_mode()
-            self._image_areas[1]._zoom_factor = self.get_zoom_factor()
+            self._image_areas[1]._fit_to_window = current_fit_mode
+            self._image_areas[1]._zoom_factor = current_zoom
             
             pixmap = self._image_model.get_pixmap(1)
             if pixmap:
-                self._image_areas[1].set_pixmap(pixmap)
-                self._image_areas[1].set_fit_to_window(self.is_fit_to_window_mode())
-                # 明示的に再描画を促す
-                self._image_areas[1]._adjust_image_size()
-                log_print(DEBUG, f"画像エリア1に画像を設定: fit={self.is_fit_to_window_mode()}")
-    
+                # pixmapを設定
+                self._image_areas[1]._current_pixmap = pixmap
+                
+                # 表示モードに応じて適切なメソッドを呼び出し
+                if current_fit_mode:
+                    self._image_areas[1].set_fit_to_window(True)
+                else:
+                    self._image_areas[1].set_zoom(current_zoom)
+                    
+                log_print(DEBUG, f"画像エリア1に画像を設定: fit={current_fit_mode}")
+
     def set_image(self, pixmap: QPixmap, data: bytes, numpy_array: Any, info: Dict, path: str, index: int = 0):
         """
         画像情報をセット
@@ -344,20 +362,37 @@ class DisplayHandler:
         if index not in [0, 1] or index >= len(self._image_areas) or not self._image_areas[index]:
             log_print(WARNING, f"無効なインデックス: {index} または画像エリアがありません")
             return
-            
+        
+        # 現在の表示モードを保存
+        current_fit_mode = self.is_fit_to_window_mode()
+        current_zoom = self.get_zoom_factor()
+        
         # 画像モデルに画像情報を設定
         if self._image_model:
             self._image_model.set_image(index, pixmap, data, numpy_array, info, path)
-        
-        # 画像エリアに画像を設定
-        self._image_areas[index].set_pixmap(pixmap)
-        self._image_areas[index].set_fit_to_window(self.is_fit_to_window_mode())
+            
+            # モデルの表示モードを明示的に現在の設定に維持
+            self._image_model.set_display_mode(current_fit_mode)
+            self._image_model.set_zoom_factor(current_zoom)
         
         # デュアルモードか確認して設定を更新
         is_dual = len(self._image_areas) >= 2 and self._image_areas[1] is not None
+        
+        # まず画像エリアの内部状態を更新
+        self._image_areas[index]._current_pixmap = pixmap
+        self._image_areas[index]._fit_to_window = current_fit_mode
+        self._image_areas[index]._zoom_factor = current_zoom
         self._image_areas[index].set_side(is_right=(index==1), is_dual=is_dual)
         
-        log_print(DEBUG, f"画像を設定: index={index}, path={path}, fit_to_window={self.is_fit_to_window_mode()}, zoom={self.get_zoom_factor()}, is_dual={is_dual}")
+        # 次に画像を表示（現在の表示モードを維持）
+        if current_fit_mode:
+            # ウィンドウに合わせるモード
+            self._image_areas[index].set_fit_to_window(True)
+        else:
+            # 原寸大表示モード
+            self._image_areas[index].set_zoom(current_zoom)
+            
+        log_print(DEBUG, f"画像を設定: index={index}, path={path}, fit_to_window={current_fit_mode}, zoom={current_zoom}, is_dual={is_dual}")
     
     def clear_image(self, index: int):
         """指定インデックスの画像をクリア"""
@@ -495,7 +530,7 @@ class DisplayHandler:
         
         Args:
             index: 取得する画像のインデックス
-            
+
         Returns:
             画像情報辞書
         """

@@ -118,12 +118,28 @@ class ViewerContextMenu:
         Args:
             entry_cache: エントリキャッシュ辞書
         """
-        # FolderMenuBuilderを使用してフォルダメニューを構築
-        FolderMenuBuilder.build_root_menu(
+        # FolderMenuBuilderを使用してフォルダメニューを構築し、返されたメニューを保存
+        self.folders_menu = FolderMenuBuilder.build_root_menu(
             parent_menu=self.folders_menu,
             action_callback=self._navigate_to,
             entry_cache=entry_cache
         )
+        
+        # メニューを親メニューに再追加（元のメニューが置き換わった場合）
+        # 古いメニューを削除
+        if self.menu.actions():
+            old_folders_menu_action = None
+            for action in self.menu.actions():
+                if action.menu() == self.folders_menu or (hasattr(action, 'text') and action.text() == "フォルダに移動"):
+                    old_folders_menu_action = action
+                    break
+            
+            if old_folders_menu_action:
+                self.menu.removeAction(old_folders_menu_action)
+        
+        # 新しいフォルダメニューを適切な位置に追加
+        # セパレータと設定メニューの間に挿入する
+        self.menu.insertMenu(self.settings_menu.menuAction(), self.folders_menu)
         
         # メニューを有効化
         self.folders_menu.setEnabled(entry_cache is not None and len(entry_cache) > 0)

@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QAction, QActionGroup, QIcon  # QIconを追加
 from logutils import log_print, DEBUG, INFO, WARNING, ERROR
 import os
+from ...menu.folder_menu import FolderMenuBuilder  # FolderMenuBuilderを追加
 
 class PreviewContextMenu(QMenu):
     """プレビューウィンドウ用のコンテキストメニュー"""
@@ -20,6 +21,9 @@ class PreviewContextMenu(QMenu):
         # クリック位置を保存する変数を追加
         self._click_position = None
         self._last_global_position = None  # 最後に使用されたグローバル位置を保存
+        
+        # 現在のフォルダパスを保存（ハイライトリセット用）
+        self._current_folder_path = ""
         
         self._create_actions()
         self._build_menu()
@@ -47,12 +51,7 @@ class PreviewContextMenu(QMenu):
         # デフォルトは原寸大表示にチェック
         self.original_size_action.setChecked(True)
         
-        # 画像操作関連
-        self.rotate_left_action = QAction("左に回転", self)
-        self.rotate_left_action.triggered.connect(self._on_rotate_left)
-        
-        self.rotate_right_action = QAction("右に回転", self)
-        self.rotate_right_action.triggered.connect(self._on_rotate_right)
+        # 画像操作関連 - 回転アクションを削除
         
         # 超解像処理アクションの追加
         self.superres_action = QAction("超解像処理を実行", self)
@@ -133,6 +132,9 @@ class PreviewContextMenu(QMenu):
     
     def _build_menu(self):
         """メニュー構造の構築"""
+        # フルスクリーンアクション（ルートに移動）
+        self.addAction(self.toggle_fullscreen_action)
+        
         # 表示メニュー
         view_menu = self.addMenu("表示")
         view_menu.addAction(self.fit_to_window_action)
@@ -148,11 +150,8 @@ class PreviewContextMenu(QMenu):
         mode_menu.addAction(self.mode_dual_rl_shift_action)
         mode_menu.addAction(self.mode_dual_lr_shift_action)
         
-        # 画像操作メニュー
+        # 画像操作メニュー - 回転メニューを削除し、超解像処理のみに変更
         image_menu = self.addMenu("画像")
-        image_menu.addAction(self.rotate_left_action)
-        image_menu.addAction(self.rotate_right_action)
-        image_menu.addSeparator()
         image_menu.addAction(self.superres_action)  # 超解像処理メニュー項目を追加
         
         # 移動メニュー - 新規追加
@@ -169,14 +168,14 @@ class PreviewContextMenu(QMenu):
         navigation_menu.addAction(self.next_folder_action)
         navigation_menu.addSeparator()
         
-        # フォルダ移動サブメニュー - 初期化時に一度だけ構築
-        self.folder_menu = navigation_menu.addMenu("フォルダに移動")
+        # フォルダ移動サブメニューを事前作成
+        self.folder_menu = QMenu("フォルダに移動")
         
-        # フォルダメニューの初期構築
+        # フォルダメニューの基本構造を構築
         self._build_folder_menu_structure()
         
-        navigation_menu.addSeparator()
-        navigation_menu.addAction(self.toggle_fullscreen_action)
+        # 構築後のフォルダメニューをナビゲーションメニューに追加
+        navigation_menu.addMenu(self.folder_menu)
         
         # ファイル操作
         self.addSeparator()
@@ -198,17 +197,14 @@ class PreviewContextMenu(QMenu):
             return
         
         try:
-            # FolderMenuBuilderを使用してフォルダメニューを構築するために、エントリキャッシュを取得
+            # エントリキャッシュを取得
             entry_cache = None
             if hasattr(archive_manager, 'get_entry_cache'):
                 entry_cache = archive_manager.get_entry_cache()
                 log_print(DEBUG, f"アーカイブマネージャからエントリキャッシュを取得: {len(entry_cache) if entry_cache else 0}エントリ")
             
-            # menu.folder_menu.pyからFolderMenuBuilderをインポート
-            from ...menu.folder_menu import FolderMenuBuilder
-            
             # FolderMenuBuilderを使用してフォルダメニューを構築
-            FolderMenuBuilder.build_root_menu(
+            self.folder_menu = FolderMenuBuilder.build_root_menu(
                 parent_menu=self.folder_menu,
                 action_callback=self._on_jump_to_folder,
                 entry_cache=entry_cache
@@ -247,17 +243,13 @@ class PreviewContextMenu(QMenu):
             # 現在のディレクトリ情報を取得
             current_path = ""
             if hasattr(self.parent, '_browser') and self.parent._browser:
-                current_path = self.parent._browser.get_current_directory()
-            
-            # 現在の位置をステータスバーに表示
-            if current_path and hasattr(self.parent, 'statusbar'):
-                dir_name = current_path.split("/")[-1] if "/" in current_path else current_path
-                dir_name = "ルート" if not dir_name else dir_name
-                # 現在表示しているフォルダ情報を更新
-                self.parent.statusbar.showMessage(f"現在のフォルダ: {dir_name}")
+                current_path = self.parent._browser._get_current_folder()
                 
-            # 注: ここではメニュー内の項目に対するチェックマークや強調表示などの
-            # 視覚的な更新は行わない。必要に応じて実装可能。
+            # 現在のパスを保存（ジャンプ前のリセット用）
+            self._current_folder_path = current_path
+                
+            # フォルダメニューを強調表示
+            FolderMenuBuilder.highlight_menu(self.folder_menu, current_path)
             
         except Exception as e:
             log_print(ERROR, f"フォルダメニュー更新中にエラー: {e}")
@@ -269,6 +261,10 @@ class PreviewContextMenu(QMenu):
         Args:
             pos: 表示位置（グローバル座標）
         """
+        if hasattr(self, '_current_folder_path') and self.folder_menu:
+            # 直前のハイライトのみをリセット（全体再帰的リセットより効率的）
+            FolderMenuBuilder.reset_path_highlights(self.folder_menu, self._current_folder_path)
+
         # クリック位置を保存（pos がQPointオブジェクトであることを確認）
         if isinstance(pos, QPoint):
             self._click_position = QPoint(pos)  # 明示的にコピーを作成
@@ -729,11 +725,19 @@ class PreviewContextMenu(QMenu):
             return
             
         try:
+            # 移動前に前回のハイライトをリセット
+            if hasattr(self, '_current_folder_path') and self.folder_menu:
+                # 直前のハイライトのみをリセット（全体再帰的リセットより効率的）
+                FolderMenuBuilder.reset_path_highlights(self.folder_menu, self._current_folder_path)
+            
             # ブラウザインスタンスを使用してフォルダにジャンプ
             browser = self.parent._browser
             success = browser.jump(path)
             
             if success:
+                # 成功した場合、新しいパスを保存
+                self._current_folder_path = path
+                
                 # ブラウザからの画像更新を要求
                 log_print(INFO, f"フォルダ '{path}' に移動しました")
                 if hasattr(self.parent, '_update_images_from_browser'):

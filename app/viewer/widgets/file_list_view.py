@@ -7,6 +7,7 @@
 import os
 import sys
 from typing import Dict, List, Any, Optional, Callable
+import platform
 
 # プロジェクトルートへのパスを追加
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
@@ -57,35 +58,70 @@ class FileListView(QListView):
         self.setWrapping(True)
         self.setSpacing(20)  # アイテム間のスペースを広げる
         self.setUniformItemSizes(True)
+        
+        # アイコンのサイズ設定
         self.setIconSize(QSize(96, 96))  # 特大アイコン表示に合わせて大きくする
-        self.setGridSize(QSize(120, 140))  # グリッドサイズも設定（アイコン+テキスト用のスペース）
+        
+        # プラットフォームに応じたグリッドサイズ調整
+        if platform.system() == 'Linux':
+            # Linux環境ではより大きな垂直スペースを確保
+            self.setGridSize(QSize(120, 160))  # より大きな垂直スペースを確保
+        else:
+            # Windows/macOSなど他のプラットフォーム
+            self.setGridSize(QSize(120, 140))
+            
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setTextElideMode(Qt.ElideRight)
         self.setWordWrap(True)
         self.setDragEnabled(False)  # ドラッグアンドドロップは無効化
         
-        # Windowsエクスプローラースタイルに近いスタイルシート
-        self.setStyleSheet("""
-            QListView {
-                background-color: white;
-                border: none;
-                padding: 5px;
-            }
-            QListView::item {
-                color: #333;
-                border-radius: 5px;
-                padding: 5px;
-                text-align: center;
-            }
-            QListView::item:selected {
-                background-color: #cce8ff;
-                border: 1px solid #99d1ff;
-            }
-            QListView::item:hover:!selected {
-                background-color: #e5f3ff;
-            }
-        """)
+        # プラットフォームに応じたスタイルシート設定
+        if platform.system() == 'Linux':
+            # Linux用のスタイルシート - テキスト配置とパディングを特に調整
+            self.setStyleSheet("""
+                QListView {
+                    background-color: white;
+                    border: none;
+                    padding: 5px;
+                }
+                QListView::item {
+                    color: #333;
+                    border-radius: 5px;
+                    padding: 5px;
+                    padding-top: 100px;  /* アイコンの下にテキスト配置のための十分なスペース */
+                    text-align: center;
+                }
+                QListView::item:selected {
+                    background-color: #cce8ff;
+                    border: 1px solid #99d1ff;
+                }
+                QListView::item:hover:!selected {
+                    background-color: #e5f3ff;
+                }
+            """)
+        else:
+            # Windows/macOSなど他のプラットフォーム用
+            self.setStyleSheet("""
+                QListView {
+                    background-color: white;
+                    border: none;
+                    padding: 5px;
+                }
+                QListView::item {
+                    color: #333;
+                    border-radius: 5px;
+                    padding: 5px;
+                    text-align: center;
+                }
+                QListView::item:selected {
+                    background-color: #cce8ff;
+                    border: 1px solid #99d1ff;
+                }
+                QListView::item:hover:!selected {
+                    background-color: #e5f3ff;
+                }
+            """)
         
         # 新しいモデルクラスを使用
         self.file_model = FileListModel(self)
@@ -450,8 +486,22 @@ class FileListView(QListView):
         if self.debug_mode:
             log_print(INFO, f"FileListView: {len(items)}個のアイテムを設定しました")
         
-        # 常に左から右、上から下への横並び・縦スクロール表示に設定
-        self.setFlow(QListView.LeftToRight)
+        # プラットフォームに応じた表示設定
+        if platform.system() == 'Linux':
+            # Linux環境では特に表示レイアウトを調整
+            self.setFlow(QListView.LeftToRight)
+            self.setTextElideMode(Qt.ElideMiddle)  # テキストが長い場合は中央で省略
+            self.setWordWrap(True)
+            
+            # モデル設定後に各アイテムのテキスト位置を調整
+            for row in range(self.model().rowCount()):
+                index = self.model().index(row, 0)
+                item = self.model().itemFromIndex(index)
+                if item:
+                    item.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+        else:
+            # Windows/macOSなど他のプラットフォーム
+            self.setFlow(QListView.LeftToRight)
         
         # アイテム設定後、自動的にサムネイル生成を開始
         self.generate_thumbnails()

@@ -6,23 +6,77 @@
 
 import os
 import sys
-from typing import Callable, Dict, Any, List, Union, Optional
+import uuid
+from typing import Callable, Dict, Any, List, Union, Optional, Set
 
-from PySide6.QtWidgets import QMenu, QFileDialog, QWidget, QApplication
-from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QMenu, QFileDialog, QWidget, QApplication, QStyleOptionMenuItem, QStyle
+from PySide6.QtGui import QAction, QPainter, QColor, QPen, QBrush
+from PySide6.QtCore import Qt, QRect, QPoint
 
 # 自然順ソートユーティリティをインポート
 from ..utils.sort import get_sorted_keys
 
 
+class HighlightableMenu(QMenu):
+    """ハイライト機能を持つカスタムメニュークラス"""
+    
+    def __init__(self, title="", parent=None):
+        super().__init__(title, parent)
+        self.highlighted_items = {}  # {action: color}
+        
+    def highlight_action(self, action, color):
+        """アクションをハイライト"""
+        self.highlighted_items[action] = color
+        
+    def clear_highlights(self):
+        """全ハイライトをクリア"""
+        self.highlighted_items.clear()
+        
+    def paintEvent(self, event):
+        """メニューの描画をカスタマイズ"""
+        painter = QPainter(self)
+        
+        # 標準のメニュー描画
+        super().paintEvent(event)
+        
+        # ハイライト対象の項目を描画
+        for action, color in self.highlighted_items.items():
+            if action in self.actions() and action.isVisible():
+                # アクションの矩形領域を取得
+                rect = self.actionGeometry(action)
+                
+                # 半透明色でハイライト背景を描画
+                painter.save()
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setPen(Qt.NoPen)
+                
+                # ハイライトの色を設定
+                if isinstance(color, str):
+                    color = QColor(color)
+                
+                brush = QBrush(QColor(color.red(), color.green(), color.blue(), 120))
+                painter.setBrush(brush)
+                painter.drawRect(rect)
+                
+                # 枠線を描画
+                painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 200), 1))
+                painter.drawRect(rect.adjusted(0, 0, -1, -1))
+                
+                painter.restore()
+        
+        painter.end()
+
+
 class FolderMenuBuilder:
     """複数のビューで共有できるフォルダ階層メニューのビルダークラス"""
+    
+    # クリアする必要のあるメニューを追跡するグローバル辞書
+    _highlight_menus = set()
     
     @staticmethod
     def build_root_menu(parent_menu: QMenu, 
                         action_callback: Callable[[str], None],
-                        entry_cache: Optional[Dict[str, Any]] = None) -> None:
+                        entry_cache: Optional[Dict[str, Any]] = None) -> QMenu:
         """
         ルートメニューを構築する
         
@@ -30,32 +84,57 @@ class FolderMenuBuilder:
             parent_menu: 親となるメニューオブジェクト
             action_callback: メニューアイテム選択時に呼び出されるコールバック関数
             entry_cache: エントリキャッシュ辞書（省略可能）
+            
+        Returns:
+            QMenu: 構築されたメニューオブジェクト（親メニューまたは新しいHighlightableMenu）
         """
+        # 親メニューを追跡対象に追加
+        FolderMenuBuilder._highlight_menus.add(parent_menu)
+        
+        # 既存のメニューがHighlightableMenuでない場合は作り直す
+        if not isinstance(parent_menu, HighlightableMenu):
+            # 元のメニューのプロパティを保持
+            title = parent_menu.title()
+            parent = parent_menu.parent()
+            
+            # 新しいHighlightableMenuを作成
+            new_menu = HighlightableMenu(title, parent)
+        else:
+            new_menu = parent_menu
+        
+        # 以降は新しいメニューで処理を続ける
+        
         # 親メニューの全アクションをクリア
-        parent_menu.clear()
+        new_menu.clear()
+        
+        # メニューのハイライトをクリア
+        if isinstance(new_menu, HighlightableMenu):
+            new_menu.clear_highlights()
         
         # ルートフォルダアクション
-        root_action = QAction("/ (ルート)", parent_menu)
+        root_action = QAction("/ (ルート)", new_menu)
         root_action.triggered.connect(lambda: action_callback(""))
-        parent_menu.addAction(root_action)
+        new_menu.addAction(root_action)
         
         # エントリキャッシュが提供されていない場合はルートアクションのみ追加して終了
         if not entry_cache:
-            parent_menu.setEnabled(False)
-            return
+            new_menu.setEnabled(False)
+            return new_menu
             
         # メニューを有効化
-        parent_menu.setEnabled(True)
+        new_menu.setEnabled(True)
         
         # セパレータを追加
-        parent_menu.addSeparator()
+        new_menu.addSeparator()
         
         # フォルダツリーを構築
         folder_tree = FolderMenuBuilder._build_folder_tree(entry_cache)
         
         # フォルダツリーが空でなければ、メニューを再帰的に構築
         if folder_tree:
-            FolderMenuBuilder._build_folder_menu(parent_menu, folder_tree, "", action_callback)
+            FolderMenuBuilder._build_folder_menu(new_menu, folder_tree, "", action_callback)
+        
+        return new_menu
     
     @staticmethod
     def _build_folder_tree(entry_cache: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,11 +219,12 @@ class FolderMenuBuilder:
             subfolders = folder_dict[folder_name]
             
             if subfolders:  # サブフォルダがある場合
-                # サブメニューを作成
-                submenu = QMenu(folder_name, parent_menu)
+                # サブメニューを作成 (HighlightableMenuを使用)
+                submenu = HighlightableMenu(folder_name, parent_menu)
+                FolderMenuBuilder._highlight_menus.add(submenu)
                 
                 # このフォルダ自体に移動するアクション
-                self_action = QAction("このフォルダを開く", parent_menu)
+                self_action = QAction("このフォルダを開く", submenu)
                 self_action.triggered.connect(lambda checked=False, path=folder_path: action_callback(path))
                 submenu.addAction(self_action)
                 
@@ -189,6 +269,7 @@ class FolderMenuBuilder:
             parent_name = parent_path.split("/")[-1] if "/" in parent_path else parent_path
             parent_action = QAction(f"上の階層 ({parent_name})", parent_menu)
             parent_action.triggered.connect(lambda: action_callback(parent_path))
+            parent_action.setObjectName(f"menuaction_{uuid.uuid4().hex}")
             parent_menu.addAction(parent_action)
                 
         # 現在のディレクトリ
@@ -196,10 +277,249 @@ class FolderMenuBuilder:
         current_dir_action = QAction(f"現在のディレクトリ ({dir_name})", parent_menu)
         current_dir_action.triggered.connect(lambda: action_callback(current_path))
         current_dir_action.setEnabled(False)  # 現在のディレクトリは選択できないように
+        current_dir_action.setObjectName(f"menuaction_{uuid.uuid4().hex}")
         parent_menu.addAction(current_dir_action)
         
         # ルートディレクトリへのアクションを追加
         parent_menu.addSeparator()
         root_action = QAction("ルートディレクトリ", parent_menu)
         root_action.triggered.connect(lambda: action_callback(""))
+        root_action.setObjectName(f"menuaction_{uuid.uuid4().hex}")
         parent_menu.addAction(root_action)
+    
+    @staticmethod
+    def _reset_menu_highlights_recursive(menu: QMenu) -> None:
+        """
+        指定されたメニューとそのすべてのサブメニューのハイライトを再帰的にリセットする
+        
+        Args:
+            menu: リセット対象のメニュー
+        """
+        # このメニューがHighlightableMenuであればハイライトをクリア
+        if isinstance(menu, HighlightableMenu):
+            menu.clear_highlights()
+            
+        # メニュー内のすべてのアクションのフォント設定をリセットし、サブメニューも再帰処理
+        for action in menu.actions():
+            # セパレータはスキップ
+            if action.isSeparator():
+                continue
+                
+            # フォントの太字設定をリセット
+            font = action.font()
+            font.setBold(False)
+            action.setFont(font)
+            
+            # サブメニューがあれば再帰的に処理
+            if action.menu():
+                submenu = action.menu()
+                FolderMenuBuilder._reset_menu_highlights_recursive(submenu)
+
+    @staticmethod
+    def _reset_all_menu_highlights() -> None:
+        """すべてのメニューのハイライトをリセット"""
+        # 追跡中のすべてのメニューを再帰的に処理
+        for menu in list(FolderMenuBuilder._highlight_menus):
+            if menu:
+                FolderMenuBuilder._reset_menu_highlights_recursive(menu)
+    
+    @staticmethod
+    def highlight_menu(menu: QMenu, path: str) -> bool:
+        """
+        指定されたパスに対応するメニュー項目を強調表示する
+        
+        Args:
+            menu: ルートメニューオブジェクト（build_root_menu()で構築したもの）
+            path: 強調表示するパス（例: 'aaa/bbb/ccc'）
+            
+        Returns:
+            bool: 該当する項目が見つかり、強調表示されたかどうか
+        """
+        # すべてのメニューのハイライトをリセット（必ず実行）
+        FolderMenuBuilder._reset_all_menu_highlights()
+        
+        # 空のパスは処理しない
+        if not path:
+            return False
+        
+        # メニューがHighlightableMenuでない場合は警告を表示
+        if not isinstance(menu, HighlightableMenu):
+            print("警告: メニューがHighlightableMenuではありません。ハイライト機能は動作しません。")
+            return False
+        
+        # パスを要素に分割
+        path_parts = [part for part in path.split('/') if part]
+        if not path_parts:
+            return False
+            
+        return FolderMenuBuilder._recursive_hilight_menu(menu, path_parts, 0, path)
+    
+    @staticmethod
+    def _recursive_hilight_menu(menu: QMenu, path_parts: List[str], level: int, full_path: str) -> bool:
+        """
+        メニューを再帰的にトラバースして指定されたパスに対応する項目を強調表示する
+        
+        Args:
+            menu: 現在のメニューオブジェクト
+            path_parts: パスの各部分のリスト
+            level: 現在の深さレベル
+            full_path: 完全なパス（デバッグ用）
+            
+        Returns:
+            bool: 該当する項目が見つかり、強調表示されたかどうか
+        """
+        if level >= len(path_parts):
+            return False
+            
+        current_part = path_parts[level]
+        last_level = level == len(path_parts) - 1
+        
+        # このレベルのすべてのアクションをチェック
+        for action in menu.actions():
+            # セパレータはスキップ
+            if action.isSeparator():
+                continue
+                
+            # アクションがメニューを持っている場合（サブメニュー）
+            if action.menu():
+                # テキストがマッチするか確認（「このフォルダを開く」などの特殊アクションを除く）
+                submenu = action.menu()
+                if action.text() == current_part:
+                    # メニューがHighlightableMenuの場合、ハイライト
+                    if isinstance(menu, HighlightableMenu):
+                        menu.highlight_action(action, "#8096F3")  # 青のハイライト
+                    
+                    # フォント設定を太字に変更
+                    font = action.font()
+                    font.setBold(True)
+                    action.setFont(font)
+                    
+                    # 最終レベルなら、「このフォルダを開く」アクションを探して強調表示
+                    if last_level and isinstance(submenu, HighlightableMenu):
+                        for sub_action in submenu.actions():
+                            if sub_action.text() == "このフォルダを開く":
+                                # ハイライト
+                                submenu.highlight_action(sub_action, "#4CAF50")  # 緑のハイライト
+                                
+                                # フォントを太字に設定して強調表示
+                                font = sub_action.font()
+                                font.setBold(True)
+                                sub_action.setFont(font)
+                                return True
+                    # 最終レベルでなければ、次のレベルを再帰的に処理
+                    else:
+                        if FolderMenuBuilder._recursive_hilight_menu(submenu, path_parts, level + 1, full_path):
+                            return True
+                
+            # 通常のアクション（サブメニューなし）
+            elif action.text() == current_part and last_level:
+                # メニューがHighlightableMenuの場合、ハイライト
+                if isinstance(menu, HighlightableMenu):
+                    menu.highlight_action(action, "#4CAF50")  # 緑のハイライト
+                
+                # フォントを太字に設定して強調表示
+                font = action.font()
+                font.setBold(True)
+                action.setFont(font)
+                return True
+                
+        return False
+
+    @staticmethod
+    def reset_path_highlights(menu: QMenu, path: str) -> bool:
+        """
+        特定のパスに対応するメニュー項目のハイライトのみをリセットする
+        （再帰的な全メニューのリセットよりも効率的）
+        
+        Args:
+            menu: ルートメニューオブジェクト
+            path: リセット対象のパス
+            
+        Returns:
+            bool: リセットが成功したかどうか
+        """
+        # 空のパスは処理しない
+        if not path:
+            return False
+        
+        # メニューがHighlightableMenuでない場合は何もしない
+        if not isinstance(menu, HighlightableMenu):
+            return False
+        
+        # パスを要素に分割
+        path_parts = [part for part in path.split('/') if part]
+        if not path_parts:
+            return False
+        
+        # パスに対応するメニュー項目のハイライトをリセット
+        return FolderMenuBuilder._reset_path_highlights_recursive(menu, path_parts, 0)
+    
+    @staticmethod
+    def _reset_path_highlights_recursive(menu: QMenu, path_parts: List[str], level: int) -> bool:
+        """
+        特定のパスに対応するメニュー項目のハイライトを再帰的にリセットする
+        
+        Args:
+            menu: 現在のメニューオブジェクト
+            path_parts: パスの各部分のリスト
+            level: 現在の深さレベル
+            
+        Returns:
+            bool: ハイライトのリセットに成功したかどうか
+        """
+        if level >= len(path_parts):
+            return False
+        
+        current_part = path_parts[level]
+        last_level = level == len(path_parts) - 1
+        
+        # このレベルのすべてのアクションをチェック
+        for action in menu.actions():
+            # セパレータはスキップ
+            if action.isSeparator():
+                continue
+            
+            # アクションがメニューを持っている場合（サブメニュー）
+            if action.menu():
+                submenu = action.menu()
+                if action.text() == current_part:
+                    # このアクションのハイライトとフォントをリセット
+                    if isinstance(menu, HighlightableMenu) and action in menu.highlighted_items:
+                        del menu.highlighted_items[action]
+                    
+                    # フォント設定を元に戻す
+                    font = action.font()
+                    font.setBold(False)
+                    action.setFont(font)
+                    
+                    # 最終レベルの場合、「このフォルダを開く」アクションもリセット
+                    if last_level and isinstance(submenu, HighlightableMenu):
+                        for sub_action in submenu.actions():
+                            if sub_action.text() == "このフォルダを開く":
+                                if sub_action in submenu.highlighted_items:
+                                    del submenu.highlighted_items[sub_action]
+                                
+                                # フォント設定を元に戻す
+                                sub_font = sub_action.font()
+                                sub_font.setBold(False)
+                                sub_action.setFont(sub_font)
+                                return True
+                    
+                    # 最終レベルでなければ、次のレベルを再帰的に処理
+                    else:
+                        if FolderMenuBuilder._reset_path_highlights_recursive(submenu, path_parts, level + 1):
+                            return True
+            
+            # 通常のアクション（サブメニューなし）
+            elif action.text() == current_part and last_level:
+                # このアクションのハイライトとフォントをリセット
+                if isinstance(menu, HighlightableMenu) and action in menu.highlighted_items:
+                    del menu.highlighted_items[action]
+                
+                # フォント設定を元に戻す
+                font = action.font()
+                font.setBold(False)
+                action.setFont(font)
+                return True
+        
+        return False

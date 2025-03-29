@@ -373,8 +373,8 @@ class ImageModel:
                 img = QImage(sr_array.data, w, h, w * 3, QImage.Format_RGB888)
                 log_print(DEBUG, "Format_RGB888のQImageを作成しました")
             elif channels == 4:  # RGBA
-                img = QImage(sr_array.data, w, h, w * 4, QImage.Format_ARGB32)
-                log_print(DEBUG, "Format_ARGB32のQImageを作成しました")
+                img = QImage(sr_array.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+                log_print(DEBUG, "Format_RGBA8888のQImageを作成しました")
             else:
                 return False
             log_print(DEBUG, f"超解像処理された画像を設定しました: index={index}, size={w}x{h}, channels={channels}")               

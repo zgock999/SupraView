@@ -203,6 +203,9 @@ class ImagePreviewWindow(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         
+        # 背景色を黒に設定
+        self.central_widget.setStyleSheet("background-color: black;")
+        
         self.main_layout = QVBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -212,6 +215,8 @@ class ImagePreviewWindow(QMainWindow):
         if self.image_model.is_dual_view():
             # デュアルビューの場合はスプリッターを使用
             self.splitter = QSplitter(Qt.Horizontal)
+            # スプリッターの背景も黒に設定
+            self.splitter.setStyleSheet("background-color: black;")
             self.main_layout.addWidget(self.splitter)
             
             # 左右の画像エリアを作成
@@ -241,6 +246,7 @@ class ImagePreviewWindow(QMainWindow):
         
         # ステータスバーを追加
         self.statusbar = QStatusBar()
+        # ステータスバーの背景は変更しない（OSのテーマに合わせるため）
         self.setStatusBar(self.statusbar)
         
         # 中央ウィジェットにキーボードフォーカスを設定

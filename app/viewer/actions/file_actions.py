@@ -343,6 +343,11 @@ class FileActionHandler(ViewerDebugMixin):
                         )
                         preview_window.show()
                         
+                        # 子ウィンドウとして親に登録
+                        if hasattr(self.parent_widget, 'register_child_window'):
+                            self.parent_widget.register_child_window(preview_window)
+                            self.debug_info("プレビューウィンドウを子ウィンドウとして登録しました")
+                        
                         # ステータスメッセージを更新
                         if self.on_status_message:
                             self.on_status_message(f"プレビューウィンドウを開きました: {os.path.basename(name)}")
@@ -397,6 +402,11 @@ class FileActionHandler(ViewerDebugMixin):
             
             # ウィンドウを表示
             hex_view.show()
+            
+            # 子ウィンドウとして親に登録
+            if hasattr(self.parent_widget, 'register_child_window'):
+                self.parent_widget.register_child_window(hex_view)
+                self.debug_info("16進数ビューワーを子ウィンドウとして登録しました")
             
             # ステータスメッセージを更新
             self._update_status(f"ファイル '{path}' を読み込みました ({len(file_data):,} バイト)")

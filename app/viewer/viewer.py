@@ -113,6 +113,9 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
         else:
             self.statusBar().showMessage("フォルダまたはアーカイブファイルをドロップしてください")
         
+        # 子ウィンドウ追跡用のリスト
+        self.child_windows = []
+        
         self.debug_info("アプリケーション初期化完了")
         
         # ドラッグ＆ドロップを有効化
@@ -376,6 +379,10 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
     def _handle_open_path(self, path: str):
         """パスを開く処理のハンドラ"""
         self.debug_info(f"パスを開きます: {path}")
+        
+        # 子ウィンドウをすべて閉じる
+        self.close_all_child_windows()
+        
         success = self.file_action_handler.open_path(path)
         if success:
             # ウィンドウタイトルを更新
@@ -388,6 +395,36 @@ class ViewerWindow(QMainWindow, ViewerDebugMixin):
             self.debug_info(f"パスの読み込み成功: {path}")
         else:
             self.debug_error(f"パスの読み込み失敗: {path}")
+    
+    def register_child_window(self, window):
+        """子ウィンドウを登録する"""
+        if window not in self.child_windows:
+            self.child_windows.append(window)
+            self.debug_info(f"子ウィンドウを登録しました。現在の子ウィンドウ数: {len(self.child_windows)}")
+    
+    def unregister_child_window(self, window):
+        """子ウィンドウの登録を解除する"""
+        if window in self.child_windows:
+            self.child_windows.remove(window)
+            self.debug_info(f"子ウィンドウの登録を解除しました。現在の子ウィンドウ数: {len(self.child_windows)}")
+    
+    def close_all_child_windows(self):
+        """すべての子ウィンドウを閉じる"""
+        # 子ウィンドウのリストをコピーして反復処理（閉じる過程でリストが変更されるため）
+        windows_to_close = self.child_windows.copy()
+        closed_count = 0
+        
+        for window in windows_to_close:
+            try:
+                window.close()
+                closed_count += 1
+            except Exception as e:
+                self.debug_error(f"子ウィンドウを閉じる際にエラーが発生しました: {e}")
+        
+        # リストをクリア（closeイベントでunregisterされなかったウィンドウがある場合に備えて）
+        self.child_windows.clear()
+        
+        self.debug_info(f"{closed_count}個の子ウィンドウを閉じました")
     
     def _handle_path_navigation(self, path: str):
         """
