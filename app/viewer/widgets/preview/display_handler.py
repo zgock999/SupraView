@@ -66,30 +66,74 @@ class ImageScrollArea(QScrollArea):
     
     def set_pixmap(self, pixmap: QPixmap):
         """画像を設定"""
+        if pixmap is None:
+            log_print(DEBUG, "設定するピクスマップがNoneです")
+            self._current_pixmap = None
+            self.image_label.setText("画像がありません")
+            self.image_label.setPixmap(QPixmap())
+            return
+            
+        if pixmap.isNull():
+            log_print(WARNING, "設定するピクスマップが無効です")
+            self._current_pixmap = None
+            self.image_label.setText("無効な画像です")
+            self.image_label.setPixmap(QPixmap())
+            return
+        
+        # 有効なピクスマップを設定
         self._current_pixmap = pixmap
+        log_print(DEBUG, f"ピクスマップを設定: {pixmap.width()}x{pixmap.height()}")
+        
         # 画像設定時に必ず表示を調整
         self._adjust_image_size()
     
     def _adjust_image_size(self):
-        """画像サイズをウィンドウに合わせて調整する"""
+        """画像のサイズを現在の表示モードに合わせて調整"""
         if not self._current_pixmap:
             return
+            
+        # モデルから最新のpixmapを取得（可能な場合）
+        # 親ウィジェットを遡って画像モデルを探す
+        latest_pixmap = self._current_pixmap  # デフォルトは現在のpixmap
         
-        # スクロールエリアのサイズを取得
+        try:
+            # 親ウィジェットを辿って画像モデルを探す
+            parent_widget = self.parent()
+            image_model = None
+            index = 0 if not self._is_right_side else 1
+            
+            # ウィジェット階層を遡ってimage_modelを探す
+            while parent_widget and not image_model:
+                if hasattr(parent_widget, 'image_model'):
+                    image_model = parent_widget.image_model
+                    break
+                parent_widget = parent_widget.parent()
+            
+            # 画像モデルが見つかり、該当インデックスに画像があれば取得
+            if image_model and hasattr(image_model, 'get_pixmap'):
+                model_pixmap = image_model.get_pixmap(index)
+                if model_pixmap and not model_pixmap.isNull():
+                    latest_pixmap = model_pixmap
+                    log_print(DEBUG, f"モデルから最新のpixmapを取得: index={index}")
+        except Exception as e:
+            # エラーが発生した場合はログに記録し、既存のpixmapを使用
+            log_print(ERROR, f"モデルからのpixmap取得に失敗: {e}")
+        
+        # ビューポートのサイズを取得
         viewport_size = self.viewport().size()
         
-        # 原画像のサイズを取得
-        img_size = self._current_pixmap.size()
+        # 画像のサイズを取得
+        img_size = latest_pixmap.size()
         
-        # デバッグログを最適化（より分かりやすく）
-        log_print(DEBUG, f"画像調整: fit_to_window={self._fit_to_window}, サイズ={img_size.width()}x{img_size.height()}, "
-                         f"ビューポート={viewport_size.width()}x{viewport_size.height()}, "
-                         f"zoom={self._zoom_factor}")
-        
-        # ウィンドウに合わせるモードの場合
         if self._fit_to_window:
-            # スケーリングされた画像を作成
-            scaled_pixmap = self._current_pixmap.scaled(
+            # スクロールバーを一時的に無効化してちらつきを防止
+            old_h_policy = self.horizontalScrollBarPolicy()
+            old_v_policy = self.verticalScrollBarPolicy()
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            
+            # スケーリングされた画像を作成 - 最新のpixmapを使用
+            scaled_pixmap = latest_pixmap.scaled(
                 viewport_size.width(), viewport_size.height(),
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
@@ -139,6 +183,12 @@ class ImageScrollArea(QScrollArea):
             
             # スケーリングされた画像を設定
             self.image_label.setPixmap(scaled_pixmap)
+            self.image_label.adjustSize()
+            self.image_label.update()
+            
+            # スクロールバーポリシーを元に戻す
+            self.setHorizontalScrollBarPolicy(old_h_policy)
+            self.setVerticalScrollBarPolicy(old_v_policy)
             return
         
         # 通常モード（ズーム係数に基づく）
@@ -146,8 +196,8 @@ class ImageScrollArea(QScrollArea):
         scaled_width = int(img_size.width() * self._zoom_factor)
         scaled_height = int(img_size.height() * self._zoom_factor)
         
-        # スケーリングされた画像を作成
-        scaled_pixmap = self._current_pixmap.scaled(
+        # スケーリングされた画像を作成 - 最新のpixmapを使用
+        scaled_pixmap = latest_pixmap.scaled(
             scaled_width, scaled_height, 
             Qt.KeepAspectRatio, 
             Qt.SmoothTransformation
@@ -191,9 +241,14 @@ class ImageScrollArea(QScrollArea):
         # 原寸大表示の場合は、ビューポートサイズに関係なく、そのまま表示
         # この修正により、原寸大表示が正しく機能するようになる
         self.image_label.setPixmap(scaled_pixmap)
-        
-        # 必要に応じてスクロールバーを調整するためにラベルのサイズを更新
         self.image_label.adjustSize()
+        self.image_label.update()
+        
+        # スクロールバーの位置を適切に調整
+        if not self._fit_to_window:
+            # 原寸表示時にはスクロールバーの位置をリセット
+            self.horizontalScrollBar().setValue(0)
+            self.verticalScrollBar().setValue(0)
     
     def set_zoom(self, factor: float):
         """ズーム係数を設定（原寸大表示とウィンドウに合わせる機能用に維持）"""
@@ -203,10 +258,9 @@ class ImageScrollArea(QScrollArea):
     
     def set_fit_to_window(self, enabled: bool):
         """ウィンドウに合わせるモードを設定"""
-        if self._fit_to_window != enabled:
-            self._fit_to_window = enabled
-            log_print(DEBUG, f"フィットモード変更: {enabled}")
-            self._adjust_image_size()
+        self._fit_to_window = enabled
+        log_print(DEBUG, f"フィットモード変更: {enabled}")
+        self._adjust_image_size()
     
     def resizeEvent(self, event: QResizeEvent):
         """リサイズイベント時に画像サイズを調整"""
@@ -367,6 +421,15 @@ class DisplayHandler:
         current_fit_mode = self.is_fit_to_window_mode()
         current_zoom = self.get_zoom_factor()
         
+        # デュアルモードか確認して設定を更新
+        is_dual = len(self._image_areas) >= 2 and self._image_areas[1] is not None
+        
+        # 画像エリアの内部状態を更新
+        self._image_areas[index]._current_pixmap = pixmap
+        self._image_areas[index]._fit_to_window = current_fit_mode
+        self._image_areas[index]._zoom_factor = current_zoom
+        self._image_areas[index].set_side(is_right=(index==1), is_dual=is_dual)
+        
         # 画像モデルに画像情報を設定
         if self._image_model:
             self._image_model.set_image(index, pixmap, data, numpy_array, info, path)
@@ -375,22 +438,31 @@ class DisplayHandler:
             self._image_model.set_display_mode(current_fit_mode)
             self._image_model.set_zoom_factor(current_zoom)
         
-        # デュアルモードか確認して設定を更新
-        is_dual = len(self._image_areas) >= 2 and self._image_areas[1] is not None
+        # 表示モードを先に設定して画面のちらつきを防止
+        if index < len(self._image_areas) and self._image_areas[index]:
+            area = self._image_areas[index]
+            
+            # 明示的に表示モードを設定
+            if hasattr(area, 'set_fit_to_window'):
+                area.set_fit_to_window(current_fit_mode)
+                
+                # 非fit_to_windowモードの場合はズーム倍率も設定
+                if not current_fit_mode and hasattr(area, 'set_zoom'):
+                    area.set_zoom(current_zoom)
+                
+                log_print(DEBUG, f"表示モードを先に設定: fit_to_window={current_fit_mode}")
         
-        # まず画像エリアの内部状態を更新
-        self._image_areas[index]._current_pixmap = pixmap
-        self._image_areas[index]._fit_to_window = current_fit_mode
-        self._image_areas[index]._zoom_factor = current_zoom
-        self._image_areas[index].set_side(is_right=(index==1), is_dual=is_dual)
-        
-        # 次に画像を表示（現在の表示モードを維持）
+        # 次に画像を表示（現在の表示モードは既に適用済み）
         if current_fit_mode:
-            # ウィンドウに合わせるモード
-            self._image_areas[index].set_fit_to_window(True)
+            # ウィンドウに合わせるモード - 画像を設定してから調整
+            self._image_areas[index].image_label.setPixmap(pixmap)
+            self._image_areas[index].image_label.adjustSize()
+            self._image_areas[index]._adjust_image_size()
         else:
-            # 原寸大表示モード
-            self._image_areas[index].set_zoom(current_zoom)
+            # 原寸大表示モード - 画像を設定してから調整
+            self._image_areas[index].image_label.setPixmap(pixmap)
+            self._image_areas[index].image_label.adjustSize()
+            self._image_areas[index]._adjust_image_size()
             
         log_print(DEBUG, f"画像を設定: index={index}, path={path}, fit_to_window={current_fit_mode}, zoom={current_zoom}, is_dual={is_dual}")
     
@@ -695,20 +767,6 @@ class DisplayHandler:
                 parent_window.main_layout.addWidget(scroll_area)
                 
                 # 2画面用に配列を2要素にする（未使用でも統一的に扱えるように）
-                parent_window.image_areas.append(None)
-                
-                # マウストラッキングを設定
-                parent_window.image_areas[0].setMouseTracking(True)
-            
-            # 表示ハンドラに新しい画像エリアを設定
-            self.setup_image_areas(parent_window.image_areas)
-            
-            # 画像ハンドラにも画像エリアを設定（重要）
-            if hasattr(parent_window, 'image_handler'):
-                parent_window.image_handler.setup_image_areas(parent_window.image_areas)
-            
-            # 保存した拡大率と表示モードを復元
-            self._fit_to_window_mode = saved_fit_mode
             self._zoom_factor = saved_zoom
             
             # ナビゲーションバーの右左モードも更新
@@ -737,17 +795,6 @@ class DisplayHandler:
                 parent_window.navigation_bar.set_right_to_left_mode(right_to_left)
                 log_print(DEBUG, f"ナビゲーションバーの右左モードを更新（モード変更時）: {right_to_left}")
             
-            # ブラウザモードが変更された場合は画像を再読み込み
-            if parent_window._browser and layout_change_needed:
-                try:
-                    # 画像を再読み込み
-                    parent_window._update_images_from_browser()
-                    log_print(INFO, f"ブラウザシフトモード変更後に画像を再読み込み: shift={browser_shift}")
-                except Exception as e:
-                    log_print(ERROR, f"画像の再読み込み中にエラーが発生しました: {e}")
-        
-        # コンテキストメニュー表示状態を更新
-        if hasattr(parent_window, 'context_menu'):
             parent_window.context_menu.update_view_mode(mode)
             log_print(DEBUG, f"コンテキストメニューの表示モードを更新: {mode}")
         
@@ -786,3 +833,44 @@ class DisplayHandler:
                 area._adjust_image_size()
         
         log_print(DEBUG, f"表示モードを更新: fit_to_window={fit_to_window}, zoom={self.get_zoom_factor()}")
+
+    def check_model_updates(self):
+        """画像モデルをチェックして必要な表示更新を行う"""
+        if not self._image_model:
+            return False
+        
+        updates_applied = False
+        
+        # 各画像インデックスについて更新フラグをチェック
+        for index in [0, 1]:
+            if self._image_model.is_display_update_needed(index):
+                # 更新が必要な場合は画像を再設定
+                log_print(DEBUG, f"画像インデックス {index} の表示更新が必要です")
+                
+                # 画像モデルから最新の情報を取得
+                pixmap = self._image_model.get_pixmap(index)
+                
+                # 画像エリアが有効で、pixmapが存在する場合のみ更新
+                if index < len(self._image_areas) and self._image_areas[index] and pixmap:
+                    # 現在の表示モードを取得
+                    fit_to_window = self._image_model.is_fit_to_window()
+                    
+                    # 画像表示エリアに最新のpixmapを設定
+                    area = self._image_areas[index]
+                    area._current_pixmap = pixmap
+                    
+                    # 表示モードに応じて適切に画像表示を更新
+                    if fit_to_window:
+                        area.set_fit_to_window(True)
+                        log_print(DEBUG, f"インデックス {index} の表示モードをウィンドウに合わせるに設定")  
+                    else:
+                        area.set_zoom(self._image_model.get_zoom_factor())
+                        log_print(DEBUG, f"インデックス {index} の表示モードを原寸大に設定")    
+                   
+                    log_print(INFO, f"インデックス {index} の表示を更新しました")
+                    updates_applied = True
+                
+                # 更新フラグをクリア
+                self._image_model.clear_display_update_flag(index)
+        
+        return updates_applied

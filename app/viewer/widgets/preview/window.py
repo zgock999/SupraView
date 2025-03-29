@@ -410,6 +410,9 @@ class ImagePreviewWindow(QMainWindow):
             # 画像情報をステータスバーに表示
             self._update_status_info()
             
+            # 画像読み込み後に表示を更新
+            self._refresh_display_after_load(index)
+            
             # 画像読み込み成功後、ブラウザが未初期化の場合は現在のパスを基準に初期化
             if self.archive_manager and not self._browser:
                 try:
@@ -425,7 +428,6 @@ class ImagePreviewWindow(QMainWindow):
                     log_print(INFO, f"アーカイブブラウザを初期化し、'{path}'へジャンプしました")
                 except Exception as e:
                     log_print(ERROR, f"アーカイブブラウザの初期化に失敗しました: {e}")
-        
         return success
     
     def _update_status_info(self):
@@ -837,6 +839,28 @@ class ImagePreviewWindow(QMainWindow):
             log_print(INFO, "超解像処理を開始しました")
         else:
             log_print(ERROR, "超解像処理の実行に失敗しました")
+
+    def _refresh_display_after_superres(self, index: int):
+        """超解像処理完了後に表示を更新"""
+        # 画像モデルから表示更新フラグをチェックして更新
+        if hasattr(self, 'display_handler') and self.display_handler:
+            # display_handlerに処理を委譲
+            self.display_handler.check_model_updates()
+            
+            # ステータス表示も更新
+            self._update_status_info()
+            log_print(DEBUG, f"超解像処理完了後に表示を更新しました: index={index}")
+
+    def _refresh_display_after_load(self, index: int):
+        """超解像処理完了後に表示を更新"""
+        # 画像モデルから表示更新フラグをチェックして更新
+        if hasattr(self, 'display_handler') and self.display_handler:
+            # display_handlerに処理を委譲
+            self.display_handler.check_model_updates()
+            
+            # ステータス表示も更新
+            self._update_status_info()
+            log_print(DEBUG, f"超解像処理前に表示を更新しました: index={index}")
 
 # 単体テスト用のコード
 if __name__ == "__main__":

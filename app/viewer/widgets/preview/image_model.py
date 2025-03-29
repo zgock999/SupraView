@@ -40,7 +40,8 @@ class ImageModel:
                 'path': "",          # 画像のパス
                 'modified': False,   # 画像が修正されたかどうか
                 'sr_array': None,    # 超解像処理後のNumPy配列
-                'sr_request': None   # 超解像処理リクエストのGUID
+                'sr_request': None,  # 超解像処理リクエストのGUID
+                'display_update_needed': False  # 表示の更新が必要かどうか
             },
             {
                 'pixmap': None,
@@ -50,7 +51,8 @@ class ImageModel:
                 'path': "",
                 'modified': False,
                 'sr_array': None,    # 超解像処理後のNumPy配列
-                'sr_request': None   # 超解像処理リクエストのGUID
+                'sr_request': None,  # 超解像処理リクエストのGUID
+                'display_update_needed': False  # 表示の更新が必要かどうか
             }
         ]
         
@@ -90,7 +92,8 @@ class ImageModel:
         self._images[index]['numpy_array'] = numpy_array
         self._images[index]['info'] = info or {}
         self._images[index]['path'] = path
-        self._images[index]['modified'] = False
+        self._images[index]['modified'] = True  # 画像が変更されたことを示すフラグを立てる
+        self._images[index]['display_update_needed'] = True  # 表示更新が必要であることを示すフラグを立てる
         
         log_print(DEBUG, f"ImageModel: インデックス {index} に画像を設定 - {path}")
         return True
@@ -117,6 +120,7 @@ class ImageModel:
         self._images[index]['modified'] = False
         self._images[index]['sr_array'] = None
         self._images[index]['sr_request'] = None
+        self._images[index]['display_update_needed'] = False  # 表示更新フラグもクリア
         
         log_print(DEBUG, f"ImageModel: インデックス {index} の画像をクリアしました")
         return True
@@ -365,7 +369,6 @@ class ImageModel:
             if not sr_array.flags['C_CONTIGUOUS']:
                 sr_array = np.ascontiguousarray(sr_array)
             
-            # NumPy配列からQImageを作成（channels数に応じて処理）
             if channels == 1:  # グレースケール
                 img = QImage(sr_array.data, w, h, w, QImage.Format_Grayscale8)
                 log_print(DEBUG, "Format_Grayscale8のQImageを作成しました")
@@ -388,6 +391,7 @@ class ImageModel:
             self._images[index]['sr_array'] = sr_array
             self._images[index]['sr_request'] = None  # 超解像リクエストIDをクリア   
             self._images[index]['modified'] = True  # 修正されたことを示すフラグ
+            self._images[index]['display_update_needed'] = True  # 表示更新が必要なフラグを立てる
             
             log_print(INFO, f"超解像処理された画像を設定しました: index={index}, size={w}x{h}")
             
@@ -480,6 +484,38 @@ class ImageModel:
             return False
         
         return self._images[index]['sr_request'] is not None
+    
+    # 表示更新関連の新しいメソッドを追加
+    def is_display_update_needed(self, index: int) -> bool:
+        """
+        表示更新が必要かどうかを確認
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            bool: 表示更新が必要な場合はTrue
+        """
+        if index not in [0, 1]:
+            return False
+        
+        return self._images[index]['display_update_needed']
+
+    def clear_display_update_flag(self, index: int) -> bool:
+        """
+        表示更新フラグをクリア
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            bool: 操作が成功した場合はTrue
+        """
+        if index not in [0, 1]:
+            return False
+        
+        self._images[index]['display_update_needed'] = False
+        return True
     
     # 以下、window.pyから移譲する表示モード関連のメソッド
     def is_dual_view(self) -> bool:
