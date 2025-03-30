@@ -489,9 +489,9 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                 self._show_status_message(f"超解像処理が完了しました: {filename}")
                 
                 # 親ウィンドウに表示更新が必要なことを通知
-                if self.parent_widget and hasattr(self.parent_widget, '_notify_image_updated'):
+                if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_superres'):
                     # MVCパターンに従い、親ウィンドウにのみ通知、表示層には直接関与しない
-                    self.parent_widget._notify_image_updated(target_index)
+                    self.parent_widget._refresh_display_after_superres(target_index)
                     log_print(DEBUG, f"親ウィンドウに超解像処理完了を通知: index={target_index}")
             else:
                 log_print(ERROR, f"超解像処理結果の適用に失敗しました: {request_id}")

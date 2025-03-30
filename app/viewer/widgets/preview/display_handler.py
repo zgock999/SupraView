@@ -253,10 +253,6 @@ class ImageScrollArea(QScrollArea):
     
     def set_fit_to_window(self, enabled: bool):
         """ウィンドウに合わせるモードを設定"""
-        # モードが同じなら何もしない
-        if self._fit_to_window == enabled:
-            return
-            
         self._fit_to_window = enabled
         log_print(DEBUG, f"フィットモード変更: {enabled}")
         self._adjust_image_size()
