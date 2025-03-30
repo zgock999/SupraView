@@ -41,7 +41,8 @@ class ImageModel:
                 'modified': False,   # 画像が修正されたかどうか
                 'sr_array': None,    # 超解像処理後のNumPy配列
                 'sr_request': None,  # 超解像処理リクエストのGUID
-                'display_update_needed': False  # 表示の更新が必要かどうか
+                'display_update_needed': False,  # 表示の更新が必要かどうか
+                'error': None        # エラー情報
             },
             {
                 'pixmap': None,
@@ -86,14 +87,17 @@ class ImageModel:
         if index not in [0, 1]:
             log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
             return False
-            
-        self._images[index]['pixmap'] = pixmap
-        self._images[index]['data'] = data
-        self._images[index]['numpy_array'] = numpy_array
-        self._images[index]['info'] = info or {}
-        self._images[index]['path'] = path
-        self._images[index]['modified'] = True  # 画像が変更されたことを示すフラグを立てる
-        self._images[index]['display_update_needed'] = True  # 表示更新が必要であることを示すフラグを立てる
+        
+        # 書き込み時はインデックスの反転を行わない
+        actual_index = index
+        
+        self._images[actual_index]['pixmap'] = pixmap
+        self._images[actual_index]['data'] = data
+        self._images[actual_index]['numpy_array'] = numpy_array
+        self._images[actual_index]['info'] = info or {}
+        self._images[actual_index]['path'] = path
+        self._images[actual_index]['modified'] = True  # 画像が変更されたことを示すフラグを立てる
+        self._images[actual_index]['display_update_needed'] = True  # 表示更新が必要であることを示すフラグを立てる
         
         log_print(DEBUG, f"ImageModel: インデックス {index} に画像を設定 - {path}")
         return True
@@ -111,16 +115,23 @@ class ImageModel:
         if index not in [0, 1]:
             log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
             return False
-            
-        self._images[index]['pixmap'] = None
-        self._images[index]['data'] = None
-        self._images[index]['numpy_array'] = None
-        self._images[index]['info'] = {}
-        self._images[index]['path'] = ""
-        self._images[index]['modified'] = False
-        self._images[index]['sr_array'] = None
-        self._images[index]['sr_request'] = None
-        self._images[index]['display_update_needed'] = False  # 表示更新フラグもクリア
+        
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        self._images[actual_index]['pixmap'] = None
+        self._images[actual_index]['data'] = None
+        self._images[actual_index]['numpy_array'] = None
+        self._images[actual_index]['info'] = {}
+        self._images[actual_index]['path'] = ""
+        self._images[actual_index]['modified'] = False
+        self._images[actual_index]['sr_array'] = None
+        self._images[actual_index]['sr_request'] = None
+        self._images[actual_index]['display_update_needed'] = False  # 表示更新フラグもクリア
+        self._images[actual_index]['error'] = None  # エラー情報もクリア
         
         log_print(DEBUG, f"ImageModel: インデックス {index} の画像をクリアしました")
         return True
@@ -139,7 +150,13 @@ class ImageModel:
             log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
             return None, None, None, {}, ""
         
-        img = self._images[index]
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        img = self._images[actual_index]
         return img['pixmap'], img['data'], img['numpy_array'], img['info'], img['path']
     
     def get_pixmap(self, index: int) -> Optional[QPixmap]:
@@ -152,10 +169,16 @@ class ImageModel:
         Returns:
             QPixmap: 画像のピクスマップ (または None)
         """
-        if index not in [0, 1] or not self._images[index]['pixmap']:
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+        
+        # 反転後のインデックスが有効かチェック
+        if actual_index not in [0, 1] or not self._images[actual_index]['pixmap']:
             return None
         
-        return self._images[index]['pixmap']
+        return self._images[actual_index]['pixmap']
     
     def get_path(self, index: int) -> str:
         """
@@ -170,7 +193,12 @@ class ImageModel:
         if index not in [0, 1]:
             return ""
         
-        return self._images[index]['path']
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+        
+        return self._images[actual_index]['path']
     
     def get_info(self, index: int) -> Dict:
         """
@@ -185,7 +213,13 @@ class ImageModel:
         if index not in [0, 1]:
             return {}
         
-        return self._images[index]['info']
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index]['info']
     
     def has_image(self, index: int) -> bool:
         """
@@ -200,7 +234,12 @@ class ImageModel:
         if index not in [0, 1]:
             return False
         
-        return self._images[index]['pixmap'] is not None
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+        
+        return self._images[actual_index]['pixmap'] is not None
     
     def get_status_info(self) -> str:
         """
@@ -210,48 +249,58 @@ class ImageModel:
             str: 表示用ステータステキスト
         """
         try:
-            # シングルビューまたはデュアルビューの1画面目の情報
-            status_msg = ""
+            # 情報を保持するための配列
+            status_info = []
+            directory_info = None
             
-            # 1枚目の画像情報
-            if self.has_image(0):
-                pixmap = self._images[0]['pixmap']
-                data = self._images[0]['data']
-                path = self._images[0]['path']
-                filename = os.path.basename(path) if path else "画像"
-                width = pixmap.width()
-                height = pixmap.height()
-                size_kb = len(data) / 1024 if data else 0
-                
-                # NumPy情報があれば追加
-                numpy_array = self._images[0]['numpy_array']
-                if numpy_array is not None:
-                    channels = 1 if len(numpy_array.shape) == 2 else numpy_array.shape[2]
-                    status_msg = f"{filename} - {width}x{height} - {channels}チャンネル ({size_kb:.1f} KB)"
-                else:
-                    status_msg = f"{filename} - {width}x{height} ({size_kb:.1f} KB)"
+            # 各画像インデックスに対して情報を取得
+            for index in [0, 1]:
+                # 画像があればその情報を追加
+                if self.has_image(index):
+                    # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+                    actual_index = index
+                    if self._dual_view and self._right_to_left:
+                        actual_index = 1 - index  # 0→1、1→0に反転
+                    
+                    pixmap = self._images[actual_index]['pixmap']
+                    data = self._images[actual_index]['data']
+                    path = self._images[actual_index]['path']
+                    
+                    # ディレクトリ情報を抽出（最初の有効なパスから取得）
+                    if not directory_info and path:
+                        directory = os.path.dirname(path)
+                        if directory:
+                            directory_info = f"[{directory}]"
+                    
+                    filename = os.path.basename(path) if path else "画像"
+                    width = pixmap.width()
+                    height = pixmap.height()
+                    size_kb = len(data) / 1024 if data else 0
+                    
+                    # NumPy情報があれば追加
+                    numpy_array = self._images[actual_index]['numpy_array']
+                    if numpy_array is not None:
+                        channels = 1 if len(numpy_array.shape) == 2 else numpy_array.shape[2]
+                        info_text = f"{filename} - {width}x{height} - {channels}チャンネル ({size_kb:.1f} KB)"
+                    else:
+                        info_text = f"{filename} - {width}x{height} ({size_kb:.1f} KB)"
+                        
+                    status_info.append(info_text)
             
-            # 2枚目の画像情報（あれば）
-            if self.has_image(1):
-                if status_msg:
-                    status_msg += " | "
-                
-                pixmap = self._images[1]['pixmap']
-                data = self._images[1]['data']
-                path = self._images[1]['path']
-                filename = os.path.basename(path) if path else "画像"
-                width = pixmap.width()
-                height = pixmap.height()
-                size_kb = len(data) / 1024 if data else 0
-                
-                numpy_array = self._images[1]['numpy_array']
-                if numpy_array is not None:
-                    channels = 1 if len(numpy_array.shape) == 2 else numpy_array.shape[2]
-                    status_msg += f"{filename} - {width}x{height} - {channels}チャンネル ({size_kb:.1f} KB)"
-                else:
-                    status_msg += f"{filename} - {width}x{height} ({size_kb:.1f} KB)"
+            # 情報がない場合
+            if not status_info:
+                return ""
             
-            return status_msg
+            # デュアルモードかつ右左表示の場合は配列の順序を反転（表示も逆に）
+            if self._dual_view and self._right_to_left and len(status_info) > 1:
+                status_info = status_info[::-1]
+            
+            # ディレクトリ情報を最初に追加（ある場合）
+            final_status = " | ".join(status_info)
+            if directory_info:
+                final_status = f"{directory_info} {final_status}"
+                
+            return final_status
             
         except Exception as e:
             log_print(ERROR, f"ステータス情報の生成に失敗しました: {e}")
@@ -345,10 +394,13 @@ class ImageModel:
         """
         if index not in [0, 1]:
             return False
-            
+        
         if not isinstance(sr_array, np.ndarray):
             return False
-            
+        
+        # 書き込み時はインデックスの反転を行わない
+        actual_index = index
+        
         try:
               
             original_info = self._images[index].get('info', {}).copy()
@@ -386,12 +438,12 @@ class ImageModel:
             log_print(DEBUG, f"pixmapを作成しました")
             
             # 情報を更新
-            self._images[index]['pixmap'] = pixmap
-            self._images[index]['info'] = info
-            self._images[index]['sr_array'] = sr_array
-            self._images[index]['sr_request'] = None  # 超解像リクエストIDをクリア   
-            self._images[index]['modified'] = True  # 修正されたことを示すフラグ
-            self._images[index]['display_update_needed'] = True  # 表示更新が必要なフラグを立てる
+            self._images[actual_index]['pixmap'] = pixmap
+            self._images[actual_index]['info'] = info
+            self._images[actual_index]['sr_array'] = sr_array
+            self._images[actual_index]['sr_request'] = None  # 超解像リクエストIDをクリア   
+            self._images[actual_index]['modified'] = True  # 修正されたことを示すフラグ
+            self._images[actual_index]['display_update_needed'] = True  # 表示更新が必要なフラグを立てる
             
             log_print(INFO, f"超解像処理された画像を設定しました: index={index}, size={w}x{h}")
             
@@ -417,8 +469,11 @@ class ImageModel:
         if index not in [0, 1]:
             log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
             return False
-            
-        self._images[index]['sr_request'] = request_id
+        
+        # 書き込み時はインデックスの反転を行わない
+        actual_index = index
+        
+        self._images[actual_index]['sr_request'] = request_id
         
         log_print(DEBUG, f"ImageModel: インデックス {index} に超解像リクエストID {request_id} を設定")
         return True
@@ -437,7 +492,13 @@ class ImageModel:
             log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
             return None
         
-        return self._images[index]['sr_array']
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index]['sr_array']
     
     def get_sr_request(self, index: int) -> Optional[str]:
         """
@@ -453,7 +514,13 @@ class ImageModel:
             log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
             return None
         
-        return self._images[index]['sr_request']
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index]['sr_request']
     
     def has_sr_array(self, index: int) -> bool:
         """
@@ -468,7 +535,13 @@ class ImageModel:
         if index not in [0, 1]:
             return False
         
-        return self._images[index]['sr_array'] is not None
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index]['sr_array'] is not None
     
     def has_sr_request(self, index: int) -> bool:
         """
@@ -483,7 +556,13 @@ class ImageModel:
         if index not in [0, 1]:
             return False
         
-        return self._images[index]['sr_request'] is not None
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index]['sr_request'] is not None
     
     # 表示更新関連の新しいメソッドを追加
     def is_display_update_needed(self, index: int) -> bool:
@@ -499,7 +578,13 @@ class ImageModel:
         if index not in [0, 1]:
             return False
         
-        return self._images[index]['display_update_needed']
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index]['display_update_needed']
 
     def clear_display_update_flag(self, index: int) -> bool:
         """
@@ -514,7 +599,13 @@ class ImageModel:
         if index not in [0, 1]:
             return False
         
-        self._images[index]['display_update_needed'] = False
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        self._images[actual_index]['display_update_needed'] = False
         return True
     
     # 以下、window.pyから移譲する表示モード関連のメソッド
@@ -637,6 +728,72 @@ class ImageModel:
                     return "dual_lr_shift"
                 else:
                     return "dual_lr"
+    
+    def set_error_info(self, index: int, error_info: Dict) -> bool:
+        """
+        指定インデックスにエラー情報を設定
+        
+        Args:
+            index: 画像インデックス (0または1)
+            error_info: エラー情報を含む辞書
+            
+        Returns:
+            bool: 設定に成功したかどうか
+        """
+        if index not in [0, 1]:
+            log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
+            return False
+        
+        # 書き込み時はインデックスの反転を行わない
+        actual_index = index
+        
+        self._images[actual_index]['error'] = error_info
+        self._images[actual_index]['display_update_needed'] = True  # 表示更新が必要
+        
+        log_print(DEBUG, f"ImageModel: インデックス {index} にエラー情報を設定しました")
+        return True
+    
+    def get_error_info(self, index: int) -> Optional[Dict]:
+        """
+        指定インデックスのエラー情報を取得
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            Dict: エラー情報の辞書（エラーがない場合はNone）
+        """
+        if index not in [0, 1]:
+            return None
+        
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index].get('error')
+    
+    def has_error(self, index: int) -> bool:
+        """
+        指定インデックスにエラーがあるか確認
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            bool: エラーがある場合はTrue
+        """
+        if index not in [0, 1]:
+            return False
+        
+        # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+        actual_index = index
+        if self._dual_view and self._right_to_left:
+            actual_index = 1 - index  # 0は1に、1は0に反転
+            log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
+        
+        return self._images[actual_index].get('error') is not None
     
     def __del__(self):
         """

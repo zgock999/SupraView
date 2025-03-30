@@ -51,9 +51,6 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
         self.archive_manager = archive_manager
         self.image_model = image_model
         
-        # 画像表示エリアの参照を保存
-        self.image_areas = []
-        
         # 超解像マネージャへの参照（初期はNone）
         self.sr_manager = None
         
@@ -66,81 +63,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
         # 遅延リクエスト用のキュー
         self._delayed_sr_requests = {}  # {index: current_path}
         
-        # 表示更新中フラグ - 再帰的な画面更新を防止
-        self._updating_display = False
-        
         log_print(DEBUG, f"ImageHandler: 初期化完了 (モデル参照: {self.image_model is not None})")
-    
-    def setup_image_areas(self, image_areas: List[QScrollArea]):
-        """
-        画像表示エリアを設定
-        
-        Args:
-            image_areas: 画像表示用のスクロールエリアのリスト
-        """
-        if not image_areas:
-            log_print(WARNING, "有効な画像エリアがありません")
-            return
-            
-        # 以前の画像エリアをクリア
-        self.image_areas = []
-        
-        # 新しい画像エリアを設定
-        self.image_areas = image_areas
-        log_print(DEBUG, f"画像表示エリアを設定: {len(image_areas)}個")
-        
-        # 既存の画像データがあれば表示を更新
-        self._update_display_from_model()
-    
-    def _update_display_from_model(self):
-        """画像モデルから画像データを取得して表示を更新"""
-        if not self.image_model:
-            return
-            
-        # 既に更新中なら、再帰的な呼び出しを避ける
-        if self._updating_display:
-            log_print(WARNING, "既に表示更新中のため、重複呼び出しをスキップします")
-            return
-            
-        try:
-            # 更新中フラグを設定
-            self._updating_display = True
-            
-            # 画像モデルから表示モード情報を取得
-            fit_to_window_mode = self.image_model.is_fit_to_window()
-            zoom_factor = self.image_model.get_zoom_factor()
-                
-            # モデルに画像データが存在するか確認
-            for index in [0, 1]:
-                if index >= len(self.image_areas) or not self.image_areas[index]:
-                    continue
-                    
-                if self.image_model.has_image(index):
-                    pixmap = self.image_model.get_pixmap(index)
-                    if (pixmap):
-                        # 表示エリアに画像を設定
-                        self._set_image_to_area(pixmap, index, adjust_display=False)
-                        
-                        # 表示モードも明示的に設定
-                        area = self.image_areas[index]
-                        if hasattr(area, 'set_fit_to_window'):
-                            area.set_fit_to_window(fit_to_window_mode)
-                            
-                            # 非fit_to_windowモードの場合はズーム倍率も設定
-                            if not fit_to_window_mode and hasattr(area, 'set_zoom'):
-                                area.set_zoom(zoom_factor)
-                        
-                        # 表示を調整（一度だけ呼び出す）
-                        if hasattr(area, '_adjust_image_size'):
-                            area._adjust_image_size()
-                            
-                        log_print(DEBUG, f"画像データをモデルから復元: index={index}, fit={fit_to_window_mode}")
-                        
-            log_print(DEBUG, "画面表示を画像モデルと同期しました")
-            
-        finally:
-            # 必ず更新中フラグをクリア
-            self._updating_display = False
     
     def load_image_from_path(self, path: str, index: int = 0, use_browser_path: bool = False) -> bool:
         """
@@ -160,17 +83,17 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             return False
         
         # インデックスの範囲を確認
-        if index not in [0, 1] or (index == 1 and (len(self.image_areas) < 2 or self.image_areas[1] is None)):
-            log_print(ERROR, f"無効なインデックス: {index}")
+        if index not in [0, 1]:
+            log_print(ERROR, f"無効なインデックス: {index} (0または1のみ有効)")
             return False
         
         try:
             # ファイル名から拡張子を取得
             _, ext = os.path.splitext(path.lower())
             
-            # 拡張子チェックを修正 - すべて小文字化して比較
+            # 拡張子チェック - すべて小文字化して比較
             supported_exts_lower = [e.lower() for e in self.SUPPORTED_EXTENSIONS]
-            if ext.lower() not in supported_exts_lower:
+            if (ext.lower() not in supported_exts_lower):
                 log_print(WARNING, f"サポートされていない画像形式です: {ext}")
                 self._show_status_message(f"サポートされていない画像形式です: {ext}")
                 return False
@@ -200,28 +123,31 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                 # 画像モデルに情報を設定（内部でmodifiedとdisplay_update_neededフラグが立つ）
                 self.image_model.set_image(index, pixmap, image_data, numpy_array, info, path)
                 
-                # 既存のリクエストがあればキャンセル
+                # 既存の超解像リクエストがあればキャンセル
                 if self.sr_manager and self.image_model.has_sr_request(index):
                     old_request_id = self.image_model.get_sr_request(index)
                     if old_request_id:
                         self.sr_manager.cancel_superres(old_request_id)
                         log_print(DEBUG, f"既存の超解像リクエスト {old_request_id} をキャンセルしました")
                 
-                # 超解像処理の自動リクエスト - タイマーが停止していることを確認
+                # 自動超解像処理の設定があれば、遅延リクエストをスケジュール
                 if self.sr_manager and numpy_array is not None and self.sr_manager.auto_process:
                     # 既に実行中のタイマーをキャンセル
                     if self.sr_delay_timer.isActive():
                         self.sr_delay_timer.stop()
                     # 遅延リクエストを登録
                     self._schedule_delayed_superres(index, path)
-                    
-                # 親ウィンドウに表示更新が必要なことを通知
-                if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
-                    self.parent_widget._refresh_display_after_load(index)
-                    log_print(DEBUG, f"画像読み込み後に表示更新を通知: index={index}, path={os.path.basename(path)}")
                 
+                # 親ウィンドウに表示更新が必要なことを通知
+                if self.parent_widget and hasattr(self.parent_widget, '_notify_image_updated'):
+                    # MVCパターンに従い、親に通知するだけで表示層に直接介入しない
+                    self.parent_widget._notify_image_updated(index)
+                    log_print(DEBUG, f"画像読み込み後に更新を通知: index={index}, path={os.path.basename(path)}")
+            
             # 画像情報をステータスバーに表示
-            self._update_status_info()
+            status_msg = self.get_status_info()
+            if status_msg:
+                self._show_status_message(status_msg)
             
             return True
             
@@ -234,7 +160,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
     
     def _schedule_delayed_superres(self, index: int, path: str):
         """超解像処理リクエストを遅延スケジュールする"""
-        # 現在のリクエストを記録 - 完全なパスを保存するように修正
+        # 現在のリクエストを記録 - 完全なパスを保存
         self._delayed_sr_requests[index] = path
         log_print(DEBUG, f"超解像処理の遅延リクエストを登録: index={index}, path={path}")
         
@@ -251,15 +177,15 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
         try:
             # 登録されていたリクエストを処理
             for index, path in list(self._delayed_sr_requests.items()):
-                    # 画像モデルから現在のパスを取得して比較
-                    current_path = self.image_model.get_path(index) if self.image_model else None
-                    log_print(DEBUG, f"遅延超解像処理のパス比較: 登録={path}, 現在={current_path}")
-                    
-                    if current_path and current_path == path:
-                        log_print(DEBUG, f"遅延された超解像処理を実行: index={index}, path={path}")
-                        self._process_single_image(index)
-                    else:
-                        log_print(DEBUG, f"画像が変更されたため超解像処理をスキップ: index={index}")
+                # 画像モデルから現在のパスを取得して比較
+                current_path = self.image_model.get_path(index) if self.image_model else None
+                log_print(DEBUG, f"遅延超解像処理のパス比較: 登録={path}, 現在={current_path}")
+                
+                if current_path and current_path == path:
+                    log_print(DEBUG, f"遅延された超解像処理を実行: index={index}, path={path}")
+                    self._process_single_image(index)
+                else:
+                    log_print(DEBUG, f"画像が変更されたため超解像処理をスキップ: index={index}")
         except Exception as e:
             log_print(ERROR, f"遅延超解像処理中にエラー: {e}")
             import traceback
@@ -268,69 +194,25 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             # 処理済みのリクエストをクリア
             self._delayed_sr_requests.clear()
     
-    def _set_image_to_area(self, pixmap: QPixmap, index: int, adjust_display: bool = True):
-        """指定されたインデックスの表示エリアに画像を設定"""
-        # インデックスの範囲チェック
-        if index not in [0, 1] or index >= len(self.image_areas) or self.image_areas[index] is None:
-            log_print(ERROR, f"無効な表示エリアインデックス: {index}")
-            return
-        
-        # 既に更新中なら、再帰呼び出しを避ける
-        if self._updating_display:
-            log_print(DEBUG, f"表示更新中のため、_set_image_to_area({index})をスキップします")
-            return
-            
-        try:
-            # 更新中フラグを設定
-            self._updating_display = True
-            
-            # QPixmapを表示エリアに設定
-            scroll_area = self.image_areas[index]
-            
-            # 表示ラベルが無い場合は作成
-            if not hasattr(scroll_area, 'image_label'):
-                scroll_area.image_label = QLabel()
-                scroll_area.image_label.setAlignment(Qt.AlignCenter)
-                scroll_area.setWidget(scroll_area.image_label)
-            
-            # 画像エリアの_current_pixmapも更新
-            if hasattr(scroll_area, '_current_pixmap'):
-                scroll_area._current_pixmap = pixmap
-            
-            # QPixmapを設定
-            scroll_area.image_label.setPixmap(pixmap)
-            scroll_area.image_label.adjustSize()
-            scroll_area.image_label.repaint()  # 明示的に再描画を要求
-            
-            # 表示モードに応じて明示的に表示を更新（オプションで無効化可能）
-            if adjust_display and hasattr(scroll_area, '_adjust_image_size'):
-                scroll_area._adjust_image_size()
-                log_print(DEBUG, f"画像エリア {index} の表示を更新")
-        finally:
-            # 必ず更新中フラグをクリア
-            self._updating_display = False
-    
     def clear_image(self, index: int):
         """
-        指定されたインデックスの画像表示をクリア
+        指定されたインデックスの画像をクリア
         
         Args:
             index: クリアする画像のインデックス
         """
         # インデックスの範囲チェック
-        if index not in [0, 1] or index >= len(self.image_areas) or self.image_areas[index] is None:
-            log_print(ERROR, f"無効な表示エリアインデックス: {index}")
+        if index not in [0, 1]:
+            log_print(ERROR, f"無効なインデックス: {index}")
             return
         
-        # 表示をクリア
-        scroll_area = self.image_areas[index]
-        if hasattr(scroll_area, 'image_label'):
-            scroll_area.image_label.clear()
-            scroll_area.image_label.setText("画像なし")
-        
-        # モデル内の画像情報もクリア
+        # モデル内の画像情報をクリア
         if self.image_model:
             self.image_model.clear_image(index)
+            
+            # 親ウィンドウに表示更新が必要なことを通知
+            if self.parent_widget and hasattr(self.parent_widget, '_notify_image_updated'):
+                self.parent_widget._notify_image_updated(index)
     
     def get_image_info(self, index: int) -> Dict[str, Any]:
         """
@@ -357,12 +239,6 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             return self.image_model.get_status_info()
         return ""
     
-    def _update_status_info(self):
-        """ステータスバーに画像情報を表示"""
-        status_msg = self.get_status_info()
-        if status_msg and self.parent_widget and hasattr(self.parent_widget, 'statusbar'):
-            self.parent_widget.statusbar.showMessage(status_msg)
-    
     def _show_status_message(self, message: str):
         """ステータスバーにメッセージを表示"""
         if self.parent_widget and hasattr(self.parent_widget, 'statusbar'):
@@ -382,11 +258,12 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
         """
         画像モデルを設定
         
+        Args:
+            image_model: 画像情報を管理するモデル
         """
         self.image_model = image_model
         log_print(INFO, "画像モデルを設定しました")
-        # 既存の画像データがあれば表示を更新
-        self._update_display_from_model()
+        # 初期化段階では画像はないため、表示更新通知は不要
     
     def is_image_loaded(self, index: int) -> bool:
         """
@@ -611,21 +488,11 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                 filename = os.path.basename(self.image_model.get_path(target_index))
                 self._show_status_message(f"超解像処理が完了しました: {filename}")
                 
-                # 画像情報をステータスバーに表示
-                self._update_status_info()
-                
-                # 親ウィンドウに通知（任意：表示更新のために必要なら）
-                if self.parent_widget and hasattr(self.parent_widget, 'display_handler'):
-                    # 直接display_handlerを呼び出すのではなく、通知フラグを設定
-                    # または必要に応じてシグナルを発行
+                # 親ウィンドウに表示更新が必要なことを通知
+                if self.parent_widget and hasattr(self.parent_widget, '_notify_image_updated'):
+                    # MVCパターンに従い、親ウィンドウにのみ通知、表示層には直接関与しない
+                    self.parent_widget._notify_image_updated(target_index)
                     log_print(DEBUG, f"親ウィンドウに超解像処理完了を通知: index={target_index}")
-                    
-                    # 表示更新はdisplay_handlerに委任する必要があることを示すログ
-                    log_print(DEBUG, f"表示更新のためにdisplay_handlerの更新が必要")
-                    
-                    # 親ウィンドウのメソッドを通じて表示更新を依頼（例）
-                    if hasattr(self.parent_widget, '_refresh_display_after_superres'):
-                        self.parent_widget._refresh_display_after_superres(target_index)
             else:
                 log_print(ERROR, f"超解像処理結果の適用に失敗しました: {request_id}")
                 self._show_status_message("処理結果の適用に失敗しました")
@@ -635,14 +502,3 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             self._show_status_message("処理結果の適用中にエラーが発生しました")
             import traceback
             log_print(DEBUG, traceback.format_exc())
-
-    def _show_status_message(self, message: str):
-        """ステータスバーにメッセージを表示"""
-        if self.parent_widget and hasattr(self.parent_widget, 'statusbar'):
-            self.parent_widget.statusbar.showMessage(message)
-    
-    def _update_status_info(self):
-        """ステータスバーに画像情報を表示"""
-        status_msg = self.get_status_info()
-        if status_msg and self.parent_widget and hasattr(self.parent_widget, 'statusbar'):
-            self.parent_widget.statusbar.showMessage(status_msg)

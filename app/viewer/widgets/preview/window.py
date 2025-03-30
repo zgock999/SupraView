@@ -34,6 +34,7 @@ from .image_model import ImageModel
 # 直接decoderモジュールからインポート
 from decoder.interface import get_supported_image_extensions
 from .navigation_bar import NavigationBar
+from .information_bar import InformationBar  # インフォメーションバーをインポート
 from .context_menu import PreviewContextMenu
 from .display_handler import ImageScrollArea, DisplayHandler
 from .event_handler import EventHandler
@@ -106,6 +107,9 @@ class ImagePreviewWindow(QMainWindow):
         # ナビゲーションバーの初期化
         self._setup_navigation_bar()
         
+        # インフォメーションバーの初期化
+        self._setup_information_bar()
+        
         # コンテキストメニューの初期化
         self._setup_context_menu()
         
@@ -125,6 +129,10 @@ class ImagePreviewWindow(QMainWindow):
         
         # デフォルトでウィンドウに合わせるモードにする
         self.fit_to_window()
+        
+        # 初期情報を表示する（インフォメーションバーを一度表示する）
+        self._update_status_info()
+        self._show_information_bar()
         
         # フォーカスイベントのデバッグ出力を追加
         self.installEventFilter(self)
@@ -159,7 +167,10 @@ class ImagePreviewWindow(QMainWindow):
         self.event_handler.register_callback('close', self.close)
         self.event_handler.register_callback('show_navigation', self._show_navigation_bar)
         self.event_handler.register_callback('hide_navigation', self._hide_navigation_bar)
+        self.event_handler.register_callback('show_information', self._show_information_bar)  # 追加
+        self.event_handler.register_callback('hide_information', self._hide_information_bar)  # 追加
         self.event_handler.register_callback('adjust_navigation_size', self._adjust_navigation_size)
+        self.event_handler.register_callback('adjust_information_size', self._adjust_information_size)  # 追加
         self.event_handler.register_callback('show_context_menu', self._show_context_menu)
         
         # 全ての登録済みコールバックをログに出力
@@ -243,10 +254,7 @@ class ImagePreviewWindow(QMainWindow):
         
         # 表示ハンドラに画像エリアを設定
         self.display_handler.setup_image_areas(self.image_areas)
-        
-        # 画像ハンドラに画像エリアを設定
-        self.image_handler.setup_image_areas(self.image_areas)
-        
+                
         # ステータスバーを追加
         self.statusbar = QStatusBar()
         # ステータスバーの背景は変更しない（OSのテーマに合わせるため）
@@ -277,6 +285,13 @@ class ImagePreviewWindow(QMainWindow):
         # 親がQMainWindowであることが前提
         # 初期状態では非表示
         self.navigation_bar.hide()
+    
+    def _setup_information_bar(self):
+        """インフォメーションバーのセットアップ"""
+        self.information_bar = InformationBar(self)
+        
+        # 初期状態では非表示
+        self.information_bar.hide()
     
     def _setup_context_menu(self):
         """コンテキストメニューの初期化"""
@@ -312,12 +327,62 @@ class ImagePreviewWindow(QMainWindow):
             return True
         return False
     
-    def _show_context_menu(self, pos):
-        """コンテキストメニューを表示"""
-        if hasattr(self, 'context_menu'):
-            self.context_menu.popup(pos)
+    def _show_information_bar(self):
+        """インフォメーションバーを表示"""
+        if hasattr(self, 'information_bar'):
+            # 画像情報を取得してバーに設定
+            self._update_information_bar_text()
+            self.information_bar.show_bar()
+            # 隠すタイマーをリセット
+            self.information_bar._hide_timer.stop()
+            log_print(DEBUG, "インフォメーションバーを表示リクエスト")
             return True
         return False
+    
+    def _hide_information_bar(self):
+        """インフォメーションバーを非表示"""
+        if hasattr(self, 'information_bar') and self.information_bar._visible:
+            # 1.5秒後に隠す
+            self.information_bar._hide_timer.start(1500)
+            return True
+        return False
+    
+    def _adjust_information_size(self, width: int):
+        """インフォメーションバーのサイズを調整"""
+        if hasattr(self, 'information_bar'):
+            # 完全な再配置を行う
+            self.information_bar._set_position()
+            
+            log_print(DEBUG, f"インフォメーションバーのサイズを調整: 幅={width}")
+            return True
+        return False
+    
+    def _update_information_bar_text(self):
+        """インフォメーションバーの表示テキストを更新"""
+        if hasattr(self, 'information_bar'):
+            # 画像モデルからステータス情報を取得
+            status_msg = self.image_model.get_status_info()
+            if status_msg:
+                # テキストを更新 (set_info_textではなくinfo_labelに直接設定して再帰を防ぐ)
+                if self.information_bar._visible and self.information_bar.isVisible():
+                    self.information_bar.info_label.setText(status_msg)
+                else:
+                    self.information_bar.set_info_text(status_msg)
+                log_print(DEBUG, f"インフォメーション更新: {status_msg}")
+    
+    def _update_status_info(self):
+        """ステータスバーに画像情報を表示"""
+        status_msg = self.image_model.get_status_info()
+        if status_msg:
+            self.statusbar.showMessage(status_msg)
+            
+            # インフォメーションバーのテキストを更新し、常に表示する
+            if hasattr(self, 'information_bar'):
+                # 新しい情報でインフォメーションバーを常に表示する
+                self.information_bar.set_info_text(status_msg)
+                # 確実に表示する（非表示になっていても）
+                self.information_bar.show_bar()
+                log_print(DEBUG, "ステータス更新でインフォメーションバーを表示")
     
     def _update_images_from_browser(self):
         """ブラウザから画像パスを取得して表示を更新"""
@@ -377,6 +442,9 @@ class ImagePreviewWindow(QMainWindow):
                 # 明示的に表示モードを適用（_refresh_display_modeを使用して一貫性を保つ）
                 self._refresh_display_mode(fit_to_window_mode)
                 
+                # 画像更新時に必ずインフォメーションバーを表示
+                self._show_information_bar()
+                
                 log_print(DEBUG, f"画像更新後の表示モード: fit_to_window={fit_to_window_mode}")
         except Exception as e:
             log_print(ERROR, f"ブラウザからの画像更新に失敗しました: {e}")
@@ -435,6 +503,9 @@ class ImagePreviewWindow(QMainWindow):
         status_msg = self.image_model.get_status_info()
         if status_msg:
             self.statusbar.showMessage(status_msg)
+            # インフォメーションバーも同時に更新
+            if hasattr(self, 'information_bar') and self.information_bar._visible:
+                self.information_bar.set_info_text(status_msg)
     
     def fit_to_window(self):
         """画像をウィンドウに合わせる"""
@@ -630,12 +701,16 @@ class ImagePreviewWindow(QMainWindow):
     
     def resizeEvent(self, event: QResizeEvent):
         """リサイズイベント処理"""
-        # イベントハンドラでナビゲーションバーのサイズを調整
+        # イベントハンドラでナビゲーションバーとインフォメーションバーのサイズを調整
         self.event_handler.handle_resize(self.width())
         
         # ナビゲーションバーの位置も調整
         if hasattr(self, 'navigation_bar') and self.navigation_bar._visible:
             self.navigation_bar._set_position()
+        
+        # インフォメーションバーの位置も調整
+        if hasattr(self, 'information_bar') and self.information_bar._visible:
+            self.information_bar._set_position()
         
         # 基底クラスの処理も呼び出す
         super().resizeEvent(event)
@@ -649,6 +724,8 @@ class ImagePreviewWindow(QMainWindow):
                 # 更新前に現在のパス情報をログ出力
                 log_print(DEBUG, f"前の画像への移動: {path}, 現在のブラウザ状態: pages={self._browser._pages}, shift={self._browser._shift}")
                 self._update_images_from_browser()
+                # 画像移動時に必ずインフォメーションバーを表示（_update_images_from_browserに含まれている場合は不要）
+                # self._show_information_bar()
                 return True
             except Exception as e:
                 log_print(ERROR, f"前の画像への移動に失敗しました: {e}")
@@ -757,23 +834,27 @@ class ImagePreviewWindow(QMainWindow):
             self.showFullScreen()
             self.statusbar.showMessage("フルスクリーンモードに切り替えました")
         
-        # フルスクリーン切り替え後にナビゲーションバーの位置を再調整
+        # フルスクリーン切り替え後にナビゲーションバーとインフォメーションバーの位置を再調整
         # 遅延を少し長めに設定して、ウィンドウのリサイズが完全に終わった後に実行
-        QTimer.singleShot(300, self._adjust_navigation_bar)
+        QTimer.singleShot(300, self._adjust_bars)
         
         return True
 
-    def _adjust_navigation_bar(self):
-        """ナビゲーションバーのサイズと位置を調整"""
-        if hasattr(self, 'navigation_bar'):
-            # ナビゲーションバーの位置を再設定
-            self.navigation_bar._set_position()
+    def _adjust_bars(self):
+        """ナビゲーションバーとインフォメーションバーのサイズと位置を調整"""
+        # ナビゲーションバーの調整
+        self._adjust_navigation_bar()
+        
+        # インフォメーションバーの調整
+        if hasattr(self, 'information_bar'):
+            # インフォメーションバーの位置を再設定
+            self.information_bar._set_position()
             
-            # ナビゲーションバーが表示されている場合は更新
-            if self.navigation_bar._visible:
-                self.navigation_bar.set_bottom_margin(10)
+            if self.information_bar._visible:
+                # 必要に応じて追加の調整を行う
+                pass
             
-            log_print(DEBUG, f"ナビゲーションバーの位置を調整しました（ウィンドウサイズ: {self.width()}x{self.height()}）")
+            log_print(DEBUG, f"インフォメーションバーの位置を調整しました（ウィンドウサイズ: {self.width()}x{self.height()}）")
 
     def eventFilter(self, watched, event):
         """イベントフィルタ - フォーカスやキーイベントをデバッグ出力"""
@@ -801,6 +882,23 @@ class ImagePreviewWindow(QMainWindow):
         try:
             # 超解像処理のキャンセル処理
             log_print(INFO, "プレビューウィンドウが閉じられます。超解像処理をキャンセルします。")
+            
+            # ナビゲーションバーとインフォメーションバーのタイマーを停止
+            if hasattr(self, 'navigation_bar') and self.navigation_bar:
+                # 隠すタイマーを停止
+                self.navigation_bar._hide_timer.stop()
+                # マウス位置チェックタイマーを停止
+                if hasattr(self.navigation_bar, '_check_mouse_timer') and self.navigation_bar._check_mouse_timer:
+                    self.navigation_bar._check_mouse_timer.stop()
+                log_print(DEBUG, "ナビゲーションバーのタイマーを停止しました")
+                
+            if hasattr(self, 'information_bar') and self.information_bar:
+                # 隠すタイマーを停止
+                self.information_bar._hide_timer.stop()
+                # マウス位置チェックタイマーを停止
+                if hasattr(self.information_bar, '_check_mouse_timer') and self.information_bar._check_mouse_timer:
+                    self.information_bar._check_mouse_timer.stop()
+                log_print(DEBUG, "インフォメーションバーのタイマーを停止しました")
             
             # 実行中の超解像処理をキャンセル
             if hasattr(self, 'image_model') and self.image_model:
@@ -861,6 +959,13 @@ class ImagePreviewWindow(QMainWindow):
             # ステータス表示も更新
             self._update_status_info()
             log_print(DEBUG, f"超解像処理前に表示を更新しました: index={index}")
+
+    def _show_context_menu(self, pos):
+        """コンテキストメニューを表示"""
+        if hasattr(self, 'context_menu'):
+            self.context_menu.popup(pos)
+            return True
+        return False
 
 # 単体テスト用のコード
 if __name__ == "__main__":

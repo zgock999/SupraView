@@ -160,6 +160,15 @@ class EventHandler:
         Returns:
             bool: イベントを処理した場合はTrue
         """
+        # ウィンドウの上部20%にマウスがあればインフォメーションバーを表示
+        if event.pos().y() < window_height * 0.2:
+            if 'show_information' in self.callbacks:
+                self.callbacks['show_information']()
+        else:
+            # それ以外の領域ではインフォメーションバーを非表示
+            if 'hide_information' in self.callbacks:
+                self.callbacks['hide_information']()
+        
         # ウィンドウの下部20%にマウスがあればナビゲーションバーを表示
         if event.pos().y() > window_height * 0.8:
             if 'show_navigation' in self.callbacks:

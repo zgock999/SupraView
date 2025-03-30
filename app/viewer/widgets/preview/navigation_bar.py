@@ -422,3 +422,15 @@ class NavigationBar(QWidget):
         # 1.5秒後に非表示
         self._hide_timer.start(1500)
         super().leaveEvent(event)
+    
+    def stop_timers(self):
+        """全てのタイマーを停止"""
+        # 自動非表示タイマーを停止
+        if self._hide_timer and self._hide_timer.isActive():
+            self._hide_timer.stop()
+        
+        # マウス位置チェックタイマーを停止
+        if self._check_mouse_timer and self._check_mouse_timer.isActive():
+            self._check_mouse_timer.stop()
+        
+        log_print(DEBUG, "ナビゲーションバーの全タイマーが停止されました")
