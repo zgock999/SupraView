@@ -93,6 +93,11 @@ class EventHandler:
         Returns:
             bool: イベントを処理した場合はTrue
         """
+        # 親ウィンドウが画像更新中かチェック
+        if hasattr(self.parent, '_is_updating_images') and self.parent._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、キーイベント処理をスキップします")
+            return True  # イベントを処理済みとしてマーク
+        
         key = event.key()
         
         # 右から左モードの場合は左右反転したキーマッピングを使用

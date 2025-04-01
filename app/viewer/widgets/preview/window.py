@@ -59,6 +59,9 @@ class ImagePreviewWindow(QMainWindow):
         """
         super().__init__(parent)
         
+        # イベント処理をブロックするためのフラグ
+        self._is_updating_images = False
+        
         # ウィンドウの基本設定
         self.setWindowTitle("画像プレビュー")
         self.resize(1024, 768)
@@ -389,6 +392,9 @@ class ImagePreviewWindow(QMainWindow):
         if not self._browser:
             return
         
+        # 更新中フラグをセット - イベント処理をブロック
+        self._is_updating_images = True
+        
         try:
             # 現在の表示モード（ウィンドウ合わせか原寸大か）を保存
             fit_to_window_mode = self.image_model.is_fit_to_window()
@@ -450,6 +456,9 @@ class ImagePreviewWindow(QMainWindow):
             log_print(ERROR, f"ブラウザからの画像更新に失敗しました: {e}")
             import traceback
             log_print(ERROR, traceback.format_exc())
+        finally:
+            # 更新完了後、フラグをリセット - イベント処理のブロックを解除
+            self._is_updating_images = False
     
     def load_image_from_path(self, path: str, index: int = 0, use_browser_path: bool = False) -> bool:
         """
@@ -673,6 +682,12 @@ class ImagePreviewWindow(QMainWindow):
     # イベント処理方法
     def keyPressEvent(self, event: QKeyEvent):
         """キーが押されたときのイベント処理"""
+        # 画像更新中はイベントを無視
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、キーイベントを無視します")
+            event.accept()  # イベント処理済みとしてマーク
+            return
+        
         # イベントハンドラに処理を委譲
         if not self.event_handler.handle_key_press(event):
             # 処理されなかった場合は親クラスに渡す
@@ -843,7 +858,7 @@ class ImagePreviewWindow(QMainWindow):
     def _adjust_bars(self):
         """ナビゲーションバーとインフォメーションバーのサイズと位置を調整"""
         # ナビゲーションバーの調整
-        self._adjust_navigation_bar()
+        self._adjust_navigation_size()
         
         # インフォメーションバーの調整
         if hasattr(self, 'information_bar'):

@@ -96,26 +96,109 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             if (ext.lower() not in supported_exts_lower):
                 log_print(WARNING, f"サポートされていない画像形式です: {ext}")
                 self._show_status_message(f"サポートされていない画像形式です: {ext}")
+                
+                # モデルにエラー情報を保存
+                if self.image_model:
+                    error_info = {
+                        'type': 'format_error',
+                        'message': f"サポートされていない画像形式です: {ext}",
+                        'path': path
+                    }
+                    self.image_model.set_error_info(index, error_info)
+                    
+                    # 親ウィンドウに表示更新が必要なことを通知
+                    if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
+                        self.parent_widget._refresh_display_after_load(index)
+                
                 return False
             
             # パスの解釈に基づいて適切なメソッドで画像データを取得
-            if use_browser_path:
-                log_print(INFO, f"ブラウザパスから画像を読み込み中: {path}")
-                image_data = self.archive_manager.extract_file(path)
-            else:
-                log_print(INFO, f"ディレクトリ相対パスから画像を読み込み中: {path}")
-                image_data = self.archive_manager.extract_item(path)
+            try:
+                if use_browser_path:
+                    log_print(INFO, f"ブラウザパスから画像を読み込み中: {path}")
+                    image_data = self.archive_manager.extract_file(path)
+                else:
+                    log_print(INFO, f"ディレクトリ相対パスから画像を読み込み中: {path}")
+                    image_data = self.archive_manager.extract_item(path)
+            except IOError as e:
+                log_print(ERROR, f"画像ファイルの読み込みにIOエラーが発生しました: {e}")
+                self._show_status_message(f"ファイル読み込みエラー: {str(e)}")
+                
+                # モデルにエラー情報を保存
+                if self.image_model:
+                    error_info = {
+                        'type': 'io_error',
+                        'message': f"ファイル読み込みエラー: {str(e)}",
+                        'path': path,
+                        'exception': str(e)
+                    }
+                    self.image_model.set_error_info(index, error_info)
+                    
+                    # 親ウィンドウに表示更新が必要なことを通知
+                    if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
+                        self.parent_widget._refresh_display_after_load(index)
+                
+                return False
             
             if not image_data:
                 log_print(ERROR, f"画像データの読み込みに失敗しました: {path}")
                 self._show_status_message(f"画像データの読み込みに失敗しました: {path}")
+                
+                # モデルにエラー情報を保存
+                if self.image_model:
+                    error_info = {
+                        'type': 'empty_data',
+                        'message': f"画像データの読み込みに失敗しました",
+                        'path': path
+                    }
+                    self.image_model.set_error_info(index, error_info)
+                    
+                    # 親ウィンドウに表示更新が必要なことを通知
+                    if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
+                        self.parent_widget._refresh_display_after_load(index)
+                
                 return False
             
             # 画像処理モジュールを使用して画像を読み込み
-            pixmap, numpy_array, info = load_image_from_bytes(image_data, path)
+            try:
+                pixmap, numpy_array, info = load_image_from_bytes(image_data, path)
+            except ValueError as e:
+                log_print(ERROR, f"画像のデコードに失敗しました: {e}")
+                self._show_status_message(f"画像のデコードエラー: {str(e)}")
+                
+                # モデルにエラー情報を保存
+                if self.image_model:
+                    error_info = {
+                        'type': 'decode_error',
+                        'message': f"画像のデコードに失敗しました: {str(e)}",
+                        'path': path,
+                        'exception': str(e)
+                    }
+                    self.image_model.set_error_info(index, error_info)
+                    
+                    # 親ウィンドウに表示更新が必要なことを通知
+                    if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
+                        self.parent_widget._refresh_display_after_load(index)
+                
+                return False
+            
             if pixmap is None:
                 log_print(ERROR, f"画像の表示に失敗しました: {path}")
                 self._show_status_message(f"画像の表示に失敗しました: {path}")
+                
+                # モデルにエラー情報を保存
+                if self.image_model:
+                    error_info = {
+                        'type': 'display_error',
+                        'message': f"画像の表示に失敗しました",
+                        'path': path
+                    }
+                    self.image_model.set_error_info(index, error_info)
+                    
+                    # 親ウィンドウに表示更新が必要なことを通知
+                    if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
+                        self.parent_widget._refresh_display_after_load(index)
+                
                 return False
             
             # 画像モデルに画像情報を設定
@@ -139,9 +222,9 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                     self._schedule_delayed_superres(index, path)
                 
                 # 親ウィンドウに表示更新が必要なことを通知
-                if self.parent_widget and hasattr(self.parent_widget, '_notify_image_updated'):
+                if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
                     # MVCパターンに従い、親に通知するだけで表示層に直接介入しない
-                    self.parent_widget._notify_image_updated(index)
+                    self.parent_widget._refresh_display_after_load(index)
                     log_print(DEBUG, f"画像読み込み後に更新を通知: index={index}, path={os.path.basename(path)}")
             
             # 画像情報をステータスバーに表示
@@ -156,6 +239,22 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             self._show_status_message(f"エラー: {str(e)}")
             import traceback
             log_print(DEBUG, traceback.format_exc())
+            
+            # モデルにエラー情報を保存
+            if self.image_model:
+                error_info = {
+                    'type': 'unknown_error',
+                    'message': f"画像の読み込み中にエラーが発生しました: {str(e)}",
+                    'path': path,
+                    'exception': str(e),
+                    'traceback': traceback.format_exc()
+                }
+                self.image_model.set_error_info(index, error_info)
+                
+                # 親ウィンドウに表示更新が必要なことを通知
+                if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
+                    self.parent_widget._refresh_display_after_load(index)
+            
             return False
     
     def _schedule_delayed_superres(self, index: int, path: str):
@@ -211,8 +310,8 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             self.image_model.clear_image(index)
             
             # 親ウィンドウに表示更新が必要なことを通知
-            if self.parent_widget and hasattr(self.parent_widget, '_notify_image_updated'):
-                self.parent_widget._notify_image_updated(index)
+            if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
+                self.parent_widget._refresh_display_after_load(index)
     
     def get_image_info(self, index: int) -> Dict[str, Any]:
         """
