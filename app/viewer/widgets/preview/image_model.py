@@ -91,6 +91,9 @@ class ImageModel:
         # 書き込み時はインデックスの反転を行わない
         actual_index = index
         
+        # 画像設定時にエラー情報を明示的にクリア
+        self._images[actual_index]['error'] = None
+        
         self._images[actual_index]['pixmap'] = pixmap
         self._images[actual_index]['data'] = data
         self._images[actual_index]['numpy_array'] = numpy_array
@@ -255,13 +258,31 @@ class ImageModel:
             
             # 各画像インデックスに対して情報を取得
             for index in [0, 1]:
-                # 画像があればその情報を追加
-                if self.has_image(index):
-                    # デュアルモードかつ右左表示の場合は、インデックスを反転させる
-                    actual_index = index
-                    if self._dual_view and self._right_to_left:
-                        actual_index = 1 - index  # 0→1、1→0に反転
+                # デュアルモードかつ右左表示の場合は、インデックスを反転させる
+                actual_index = index
+                if self._dual_view and self._right_to_left:
+                    actual_index = 1 - index  # 0→1、1→0に反転
                     
+                # エラーがある場合はエラー情報を表示
+                error_info = self._images[actual_index].get('error')
+                if error_info:
+                    error_message = error_info.get('message', "エラー")
+                    path = error_info.get('path', "")
+                    filename = os.path.basename(path) if path else "画像"
+                    
+                    # ディレクトリ情報を抽出
+                    if not directory_info and path:
+                        directory = os.path.dirname(path)
+                        if directory:
+                            directory_info = f"[{directory}]"
+                    
+                    # エラー情報を含むステータステキスト
+                    info_text = f"{filename} - {error_message}"
+                    status_info.append(info_text)
+                    continue
+                
+                # 画像があればその情報を追加
+                if self._images[actual_index]['pixmap'] is not None:
                     pixmap = self._images[actual_index]['pixmap']
                     data = self._images[actual_index]['data']
                     path = self._images[actual_index]['path']
@@ -284,6 +305,10 @@ class ImageModel:
                         info_text = f"{filename} - {width}x{height} - {channels}チャンネル ({size_kb:.1f} KB)"
                     else:
                         info_text = f"{filename} - {width}x{height} ({size_kb:.1f} KB)"
+                        
+                    # 超解像処理されていたら表示
+                    if self._images[actual_index].get('sr_array') is not None:
+                        info_text += " [超解像]"
                         
                     status_info.append(info_text)
             
@@ -402,6 +427,10 @@ class ImageModel:
         actual_index = index
         
         try:
+            # ※※※ 新規コード追加：エラーがある場合は超解像処理の保存を拒否 ※※※
+            if self._images[actual_index].get('error') is not None:
+                log_print(WARNING, f"インデックス {index} にエラーがあるため、超解像処理結果を保存できません")
+                return False
               
             original_info = self._images[index].get('info', {}).copy()
             
@@ -794,6 +823,27 @@ class ImageModel:
             log_print(DEBUG, f"RTLモードのため、インデックスを反転: {index} → {actual_index}")
         
         return self._images[actual_index].get('error') is not None
+    
+    def clear_error_info(self, index: int) -> bool:
+        """
+        指定インデックスのエラー情報をクリア
+        
+        Args:
+            index: 画像インデックス
+            
+        Returns:
+            bool: 操作に成功した場合はTrue
+        """
+        if index not in [0, 1]:
+            log_print(ERROR, f"ImageModel: 無効なインデックス {index}")
+            return False
+        
+        # エラー情報をクリアして表示更新フラグを設定
+        self._images[index]['error'] = None
+        self._images[index]['display_update_needed'] = True
+        
+        log_print(DEBUG, f"ImageModel: インデックス {index} のエラー情報をクリアしました")
+        return True
     
     def __del__(self):
         """

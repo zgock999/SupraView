@@ -20,7 +20,7 @@ try:
         QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar
     )
     from PySide6.QtCore import Qt, QTimer, QEvent
-    from PySide6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent, QContextMenuEvent, QResizeEvent
+    from PySide6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent, QContextMenuEvent, QResizeEvent, QPixmap
 except ImportError:
     log_print(ERROR, "PySide6が必要です。pip install pyside6 でインストールしてください。")
     sys.exit(1)
@@ -965,15 +965,42 @@ class ImagePreviewWindow(QMainWindow):
             log_print(DEBUG, f"超解像処理完了後に表示を更新しました: index={index}")
 
     def _refresh_display_after_load(self, index: int):
-        """超解像処理完了後に表示を更新"""
+        """画像読み込み後に表示を更新"""
         # 画像モデルから表示更新フラグをチェックして更新
         if hasattr(self, 'display_handler') and self.display_handler:
-            # display_handlerに処理を委譲
+            # 画像読み込み後のエラーチェック処理
+            if hasattr(self, 'image_model'):
+                error_info = self.image_model.get_error_info(index)
+                if error_info and index < len(self.image_areas) and self.image_areas[index]:
+                    try:
+                        # エラー情報がある場合はエラーメッセージを表示
+                        error_message = error_info.get('message', "画像を読み込めませんでした")
+                        path = error_info.get('path', "")
+                        filename = os.path.basename(path) if path else ""
+                        
+                        # ファイル名を添えたエラーメッセージ
+                        display_message = f"{error_message}\n\n{filename}" if filename else error_message
+                        
+                        area = self.image_areas[index]
+                        area._current_pixmap = None
+                        area.image_label.setText(display_message)
+                        area.image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
+                        area.image_label.setAlignment(Qt.AlignCenter)
+                        area.image_label.setPixmap(QPixmap())  # 空のピクスマップを明示的にセット
+                        
+                        log_print(INFO, f"画像読み込みエラーを表示: {error_message} (ファイル: {filename})")
+                        
+                        # エラー表示後は更新フラグをクリア
+                        self.image_model.clear_display_update_flag(index)
+                    except Exception as e:
+                        log_print(ERROR, f"エラー表示中にエラーが発生: {e}")
+            
+            # エラーがない場合は通常の表示更新処理
             self.display_handler.check_model_updates()
             
             # ステータス表示も更新
             self._update_status_info()
-            log_print(DEBUG, f"超解像処理前に表示を更新しました: index={index}")
+            log_print(DEBUG, f"読み込み後に表示を更新しました: index={index}")
 
     def _show_context_menu(self, pos):
         """コンテキストメニューを表示"""

@@ -7,7 +7,7 @@
 import os
 from typing import Optional, Dict, List, Tuple, Any
 from PySide6.QtWidgets import QScrollArea, QLabel, QSizePolicy, QFrame
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QMetaObject, Signal, Slot, QObject
 from PySide6.QtGui import QPixmap, QResizeEvent
 from logutils import log_print, INFO, WARNING, ERROR, DEBUG
 
@@ -286,6 +286,16 @@ class ImageScrollArea(QScrollArea):
             super().keyPressEvent(event)
 
 
+# スレッドセーフな通信を行うためのシグナルクラス
+class UpdateSignals(QObject):
+    """スレッド間通信のためのシグナルクラス"""
+    
+    # エラー表示用シグナル
+    show_error = Signal(object, str, str)  # (area, error_message, filename)
+    # 画像表示用シグナル
+    show_image = Signal(object, object, bool, float, bool, bool)  # (area, pixmap, fit_to_window, zoom_factor, is_dual, is_right_side)
+
+
 class DisplayHandler:
     """画像表示処理を担当するハンドラクラス"""
     
@@ -302,6 +312,11 @@ class DisplayHandler:
         
         # 画像モデルの参照を保存
         self._image_model = image_model
+        
+        # スレッド間通信用のシグナルオブジェクト
+        self._signals = UpdateSignals()
+        self._signals.show_error.connect(self._on_show_error)
+        self._signals.show_image.connect(self._on_show_image)
         
         log_print(DEBUG, f"DisplayHandler: 初期化完了 (モデル参照: {self._image_model is not None}, fit={self.is_fit_to_window_mode()})")
     
@@ -404,49 +419,89 @@ class DisplayHandler:
             self._image_areas[0]._fit_to_window = current_fit_mode
             self._image_areas[0]._zoom_factor = current_zoom
             
-            pixmap = self._image_model.get_pixmap(0)
-            if pixmap:
-                # pixmapを設定
-                self._image_areas[0]._current_pixmap = pixmap
+            # エラー情報をチェック
+            error_info = self._image_model.get_error_info(0)
+            if error_info:
+                # エラー情報がある場合はエラーメッセージを表示
+                error_message = error_info.get('message', "画像を読み込めませんでした")
+                path = error_info.get('path', "")
+                filename = os.path.basename(path) if path else ""
                 
-                # 表示モードに応じて適切なメソッドを呼び出し
-                if current_fit_mode:
-                    self._image_areas[0].set_fit_to_window(True)
-                else:
-                    self._image_areas[0].set_zoom(current_zoom)
+                # ファイル名を添えたエラーメッセージ
+                display_message = f"{error_message}\n\n{filename}" if filename else error_message
                 
-                log_print(DEBUG, f"画像エリア0に画像を設定: fit={current_fit_mode}")
-            else:
-                # ピクスマップがない場合はエラーメッセージを表示
                 self._image_areas[0]._current_pixmap = None
-                self._image_areas[0].image_label.setText("画像がありません")
+                self._image_areas[0].image_label.setText(display_message)
                 self._image_areas[0].image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
-                self._image_areas[0].image_label.setPixmap(QPixmap())  # 空のピクスマップを明示的にセット
-                
+                self._image_areas[0].image_label.setAlignment(Qt.AlignCenter)
+                self._image_areas[0].image_label.setPixmap(QPixmap())  # 空のピクスマップをクリア
+                log_print(INFO, f"エラー情報を表示: {error_message} (ファイル: {filename})")
+            else:
+                # エラーがない場合のみ通常の画像表示処理を実行
+                # 通常の画像表示処理
+                pixmap = self._image_model.get_pixmap(0)
+                if pixmap:
+                    # pixmapを設定
+                    self._image_areas[0]._current_pixmap = pixmap
+                    
+                    # 表示モードに応じて適切なメソッドを呼び出し
+                    if current_fit_mode:
+                        self._image_areas[0].set_fit_to_window(True)
+                    else:
+                        self._image_areas[0].set_zoom(current_zoom)
+                    
+                    log_print(DEBUG, f"画像エリア0に画像を設定: fit={current_fit_mode}")
+                else:
+                    # ピクスマップがない場合はエラーメッセージを表示
+                    self._image_areas[0]._current_pixmap = None
+                    self._image_areas[0].image_label.setText("画像がありません")
+                    self._image_areas[0].image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
+                    self._image_areas[0].image_label.setPixmap(QPixmap())  # 空のピクスマップを明示的にセット
+        
         # 画像エリア1（右）の更新（デュアルモードの場合）
         if len(self._image_areas) > 1 and self._image_areas[1] is not None:  # Noneチェックを明示的に追加
             # 表示モードの設定を明示的に更新
             self._image_areas[1]._fit_to_window = current_fit_mode
             self._image_areas[1]._zoom_factor = current_zoom
             
-            pixmap = self._image_model.get_pixmap(1)
-            if pixmap:
-                # pixmapを設定
-                self._image_areas[1]._current_pixmap = pixmap
+            # エラー情報をチェック
+            error_info = self._image_model.get_error_info(1)
+            if error_info:
+                # エラー情報がある場合はエラーメッセージを表示
+                error_message = error_info.get('message', "画像を読み込めませんでした")
+                path = error_info.get('path', "")
+                filename = os.path.basename(path) if path else ""
                 
-                # 表示モードに応じて適切なメソッドを呼び出し
-                if current_fit_mode:
-                    self._image_areas[1].set_fit_to_window(True)
-                else:
-                    self._image_areas[1].set_zoom(current_zoom)
-                    
-                log_print(DEBUG, f"画像エリア1に画像を設定: fit={current_fit_mode}")
-            else:
-                # ピクスマップがない場合はエラーメッセージを表示
+                # ファイル名を添えたエラーメッセージ
+                display_message = f"{error_message}\n\n{filename}" if filename else error_message
+                
                 self._image_areas[1]._current_pixmap = None
-                self._image_areas[1].image_label.setText("画像がありません")
+                self._image_areas[1].image_label.setText(display_message)
                 self._image_areas[1].image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
-                self._image_areas[1].image_label.setPixmap(QPixmap())  # 空のピクスマップを明示的にセット
+                self._image_areas[1].image_label.setAlignment(Qt.AlignCenter)
+                self._image_areas[1].image_label.setPixmap(QPixmap())  # 空のピクスマップをクリア
+                log_print(INFO, f"エラー情報を表示: {error_message} (ファイル: {filename})")
+            else:
+                # エラーがない場合のみ通常の画像表示処理を実行
+                # 通常の画像表示処理
+                pixmap = self._image_model.get_pixmap(1)
+                if pixmap:
+                    # pixmapを設定
+                    self._image_areas[1]._current_pixmap = pixmap
+                    
+                    # 表示モードに応じて適切なメソッドを呼び出し
+                    if current_fit_mode:
+                        self._image_areas[1].set_fit_to_window(True)
+                    else:
+                        self._image_areas[1].set_zoom(current_zoom)
+                        
+                    log_print(DEBUG, f"画像エリア1に画像を設定: fit={current_fit_mode}")
+                else:
+                    # ピクスマップがない場合はエラーメッセージを表示
+                    self._image_areas[1]._current_pixmap = None
+                    self._image_areas[1].image_label.setText("画像がありません")
+                    self._image_areas[1].image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
+                    self._image_areas[1].image_label.setPixmap(QPixmap())  # 空のピクスマップを明示的にセット
 
     def set_image(self, pixmap: QPixmap, data: bytes, numpy_array: Any, info: Dict, path: str, index: int = 0):
         """
@@ -1056,6 +1111,66 @@ class DisplayHandler:
         
         log_print(DEBUG, f"表示モードを更新: fit_to_window={fit_to_window}, zoom={self.get_zoom_factor()}")
 
+    @Slot(object, str, str)
+    def _on_show_error(self, area, error_message, filename):
+        """エラーメッセージを表示するスロット（UIスレッドで実行）"""
+        try:
+            if not area:
+                log_print(ERROR, "エリアが無効です")
+                return
+                
+            # 表示するメッセージの整形
+            display_message = f"{error_message}\n\n{filename}" if filename else error_message
+            
+            # 画像情報をクリアして、エラーメッセージを設定
+            area._current_pixmap = None
+            area.image_label.setText(display_message)
+            area.image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
+            area.image_label.setAlignment(Qt.AlignCenter)
+            area.image_label.setPixmap(QPixmap())  # 空のピクスマップを明示的にセット
+            
+            log_print(INFO, f"エラー情報を表示: {error_message} (ファイル: {filename})")
+        except Exception as e:
+            log_print(ERROR, f"エラー表示中にエラーが発生: {e}")
+            import traceback
+            log_print(ERROR, traceback.format_exc())
+
+    @Slot(object, object, bool, float, bool, bool)
+    def _on_show_image(self, area, pixmap, fit_to_window, zoom_factor, is_dual, is_right_side):
+        """画像を表示するスロット（UIスレッドで実行）"""
+        try:
+            if not area:
+                log_print(ERROR, "エリアが無効です")
+                return
+                
+            # ピクスマップを更新
+            area._current_pixmap = pixmap
+            
+            # 設定を更新
+            area._fit_to_window = fit_to_window
+            area._zoom_factor = zoom_factor
+            area._is_dual_mode = is_dual
+            area._is_right_side = is_right_side
+            
+            # テキストを明示的にクリア
+            area.image_label.setText("")
+            
+            # 表示モードに応じて適切に画像表示を更新
+            if fit_to_window:
+                area.set_fit_to_window(True)
+                log_print(DEBUG, "表示モードをウィンドウに合わせるに設定")  
+            else:
+                area.set_zoom(zoom_factor)
+                log_print(DEBUG, "表示モードを原寸大に設定")
+            
+            # ラベルの設定を強化
+            area.image_label.setStyleSheet("color: white; background-color: black;")
+            
+        except Exception as e:
+            log_print(ERROR, f"画像表示中にエラーが発生: {e}")
+            import traceback
+            log_print(ERROR, traceback.format_exc())
+
     def check_model_updates(self):
         """画像モデルをチェックして必要な表示更新を行う"""
         if not self._image_model:
@@ -1069,9 +1184,6 @@ class DisplayHandler:
         
         # デュアルモードの状態とRTL情報をモデルから直接取得
         is_dual = self._image_model.is_dual_view()
-        
-        # デュアルモードの状態を明示的にログ出力
-        log_print(DEBUG, f"check_model_updates: デュアルモード={is_dual}, 画像エリア数={len(self._image_areas)}")
         
         # インデックスの検証を強化
         for index in range(2):
@@ -1090,50 +1202,55 @@ class DisplayHandler:
             
             log_print(DEBUG, f"画像インデックス {index} の表示更新が必要です")
             
-            # 画像モデルから最新の情報を取得
-            pixmap = self._image_model.get_pixmap(index)
+            # エリアオブジェクト取得
             area = self._image_areas[index]
             
-            # デュアルモードとRTL情報を明示的に更新（常に最新状態に保つ）
-            area._is_dual_mode = is_dual
-            area._is_right_side = (index == 1)
-            
-            # 表示モードを明示的に設定
-            area._fit_to_window = fit_to_window
-            area._zoom_factor = zoom_factor
-            
-            log_print(INFO, f"画像エリア {index} のモード設定: dual_mode={is_dual}, right_side={index==1}")
+            # 通常の画像表示処理
+            # 画像モデルから最新の情報を取得
+            pixmap = self._image_model.get_pixmap(index)
             
             # 有効なピクスマップがあれば表示設定
             if pixmap:
-                area._current_pixmap = pixmap
-                
-                # テキストを明示的にクリア
-                area.image_label.setText("")
-                
-                # 表示モードに応じて適切に画像表示を更新
-                if fit_to_window:
-                    area.set_fit_to_window(True)
-                    log_print(DEBUG, f"インデックス {index} の表示モードをウィンドウに合わせるに設定")  
-                else:
-                    area.set_zoom(zoom_factor)
-                    log_print(DEBUG, f"インデックス {index} の表示モードを原寸大に設定")
-                
-                # ラベルの設定を強化
-                area.image_label.setStyleSheet("color: white; background-color: black;")
+                try:
+                    # ピクスマップを更新
+                    area._current_pixmap = pixmap
+                    
+                    # 設定を更新
+                    area._fit_to_window = fit_to_window
+                    area._zoom_factor = zoom_factor
+                    area._is_dual_mode = is_dual
+                    area._is_right_side = (index == 1)
+                    
+                    # テキストを明示的にクリア
+                    area.image_label.setText("")
+                    
+                    # 表示モードに応じて適切に画像表示を更新
+                    if fit_to_window:
+                        area.set_fit_to_window(True)
+                        log_print(DEBUG, "表示モードをウィンドウに合わせるに設定")  
+                    else:
+                        area.set_zoom(zoom_factor)
+                        log_print(DEBUG, "表示モードを原寸大に設定")
+                    
+                    # ラベルの設定を強化
+                    area.image_label.setStyleSheet("color: white; background-color: black;")
+                except Exception as e:
+                    log_print(ERROR, f"画像表示中にエラーが発生: {e}")
+                    import traceback
+                    log_print(ERROR, traceback.format_exc())
             else:
-                # ピクスマップがない場合はエラーメッセージ表示
-                area._current_pixmap = None  # 明示的にクリア
-                area.image_label.setText("画像を読み込めませんでした")
-                area.image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
-                area.image_label.setAlignment(Qt.AlignCenter)
-                # 空のピクスマップを設定（重要: これを行わないとテキストが表示されない場合がある）
-                area.image_label.setPixmap(QPixmap())
-                log_print(WARNING, f"インデックス {index} の画像を読み込めませんでした")
-            
-            # イベント処理を強制的に実行してUIを更新
-            from PySide6.QtCore import QCoreApplication
-            QCoreApplication.processEvents()
+                try:
+                    # ピクスマップがない場合はエラーメッセージ表示
+                    area._current_pixmap = None
+                    area.image_label.setText("画像がありません")
+                    area.image_label.setStyleSheet("color: white; background-color: black; font-size: 14px;")
+                    area.image_label.setAlignment(Qt.AlignCenter)
+                    area.image_label.setPixmap(QPixmap())  # 空のピクスマップを明示的にセット
+                    log_print(WARNING, f"インデックス {index} の画像を読み込めませんでした")
+                except Exception as e:
+                    log_print(ERROR, f"エラー表示中にエラーが発生: {e}")
+                    import traceback
+                    log_print(ERROR, traceback.format_exc())
             
             updates_applied = True
             

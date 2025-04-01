@@ -88,6 +88,11 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             return False
         
         try:
+            # 新しい画像読み込み時には、まず過去のエラー情報をクリアする
+            if self.image_model:
+                self.image_model.clear_error_info(index)
+                log_print(DEBUG, f"インデックス {index} のエラー情報をクリアしました")
+            
             # ファイル名から拡張子を取得
             _, ext = os.path.splitext(path.lower())
             
@@ -110,6 +115,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                     if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
                         self.parent_widget._refresh_display_after_load(index)
                 
+                # エラーが発生したので超解像処理は行わない
                 return False
             
             # パスの解釈に基づいて適切なメソッドで画像データを取得
@@ -138,6 +144,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                     if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
                         self.parent_widget._refresh_display_after_load(index)
                 
+                # エラーが発生したので超解像処理は行わない
                 return False
             
             if not image_data:
@@ -157,6 +164,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                     if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
                         self.parent_widget._refresh_display_after_load(index)
                 
+                # エラーが発生したので超解像処理は行わない
                 return False
             
             # 画像処理モジュールを使用して画像を読み込み
@@ -180,6 +188,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                     if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
                         self.parent_widget._refresh_display_after_load(index)
                 
+                # エラーが発生したので超解像処理は行わない
                 return False
             
             if pixmap is None:
@@ -199,6 +208,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                     if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
                         self.parent_widget._refresh_display_after_load(index)
                 
+                # エラーが発生したので超解像処理は行わない
                 return False
             
             # 画像モデルに画像情報を設定
@@ -213,13 +223,17 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                         self.sr_manager.cancel_superres(old_request_id)
                         log_print(DEBUG, f"既存の超解像リクエスト {old_request_id} をキャンセルしました")
                 
-                # 自動超解像処理の設定があれば、遅延リクエストをスケジュール
+                # エラーがないことを確認してから自動超解像処理をスケジュール
                 if self.sr_manager and numpy_array is not None and self.sr_manager.auto_process:
-                    # 既に実行中のタイマーをキャンセル
-                    if self.sr_delay_timer.isActive():
-                        self.sr_delay_timer.stop()
-                    # 遅延リクエストを登録
-                    self._schedule_delayed_superres(index, path)
+                    # エラー情報があるか確認
+                    if not self.image_model.has_error(index):
+                        # 既に実行中のタイマーをキャンセル
+                        if self.sr_delay_timer.isActive():
+                            self.sr_delay_timer.stop()
+                        # 遅延リクエストを登録
+                        self._schedule_delayed_superres(index, path)
+                    else:
+                        log_print(INFO, f"インデックス {index} にエラーが発生しているため、自動超解像処理をスキップします")
                 
                 # 親ウィンドウに表示更新が必要なことを通知
                 if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
@@ -255,10 +269,16 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                 if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_load'):
                     self.parent_widget._refresh_display_after_load(index)
             
+            # エラーが発生したので超解像処理は行わない
             return False
     
     def _schedule_delayed_superres(self, index: int, path: str):
         """超解像処理リクエストを遅延スケジュールする"""
+        # エラーがある場合は超解像処理をスケジュールしない
+        if self.image_model and self.image_model.has_error(index):
+            log_print(INFO, f"インデックス {index} にエラーがあるため、遅延超解像処理はスケジュールしません")
+            return
+            
         # 現在のリクエストを記録 - 完全なパスを保存
         self._delayed_sr_requests[index] = path
         log_print(DEBUG, f"超解像処理の遅延リクエストを登録: index={index}, path={path}")
@@ -276,6 +296,11 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
         try:
             # 登録されていたリクエストを処理
             for index, path in list(self._delayed_sr_requests.items()):
+                # エラー確認を追加
+                if self.image_model and self.image_model.has_error(index):
+                    log_print(INFO, f"インデックス {index} にエラーが発生しているため、遅延超解像処理をスキップします")
+                    continue
+                
                 # 画像モデルから現在のパスを取得して比較
                 current_path = self.image_model.get_path(index) if self.image_model else None
                 log_print(DEBUG, f"遅延超解像処理のパス比較: 登録={path}, 現在={current_path}")
@@ -483,6 +508,11 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             self._show_status_message("処理する画像がありません")
             return False
         
+        # エラー確認を追加
+        if self.image_model.has_error(index):
+            log_print(INFO, f"インデックス {index} にエラーが発生しているため、超解像処理をスキップします")
+            return False
+            
         # NumPy配列形式の画像データを取得
         _, _, numpy_array, _, path = self.image_model.get_image(index)
         
@@ -509,7 +539,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             filename = os.path.basename(path)
             self._show_status_message(f"超解像処理を開始しています: {filename}...")
             
-            # 超解像処理用のコールバックを定義 - self weak referenceの問題対策
+            # 超解像処理用のコールバックを定義
             def _internal_callback(request_id, processed_array):
                 """コールバックのセーフラッパー"""
                 try:
@@ -518,6 +548,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                         log_print(WARNING, "コールバック実行時にオブジェクトが破棄されています")
                         return
                         
+                    # 直接処理メソッドを呼び出す
                     self._on_superres_completed(index, request_id, processed_array)
                 except Exception as e:
                     log_print(ERROR, f"超解像コールバック内でエラー: {e}")
@@ -547,7 +578,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
         # 対応するリクエストIDを確認
         target_index = original_index  # デフォルト
         
-        try:
+        try:        
             # 現在のリクエストIDを取得
             current_request_id = self.image_model.get_sr_request(original_index)
             
@@ -576,6 +607,12 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                 log_print(ERROR, f"超解像処理の結果がNullです: {request_id}")
                 self._show_status_message("超解像処理に失敗しました")
                 return
+                
+            # ※※※ 新規コード追加：エラーがある場合は超解像処理結果を破棄 ※※※
+            if self.image_model.has_error(target_index):
+                log_print(WARNING, f"インデックス {target_index} にエラーがあるため、超解像処理結果を破棄します")
+                self._show_status_message("画像エラーのため超解像処理結果を適用できません")
+                return
             
             # 結果を画像モデルに設定（表示更新のフラグも立てる）
             success = self.image_model.set_sr_array(target_index, processed_array)
@@ -589,7 +626,7 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                 
                 # 親ウィンドウに表示更新が必要なことを通知
                 if self.parent_widget and hasattr(self.parent_widget, '_refresh_display_after_superres'):
-                    # MVCパターンに従い、親ウィンドウにのみ通知、表示層には直接関与しない
+                    # MVCパターンに従い、親に通知するだけで表示層に直接関与しない
                     self.parent_widget._refresh_display_after_superres(target_index)
                     log_print(DEBUG, f"親ウィンドウに超解像処理完了を通知: index={target_index}")
             else:
