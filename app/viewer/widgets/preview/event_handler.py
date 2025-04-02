@@ -39,6 +39,13 @@ class EventHandler:
             'next_folder', 'prev_folder', 
             'first_image', 'last_image'
         ]
+
+        # ロック対象外のUI操作アクション（明示的にリスト化）
+        self._ui_actions = [
+            'toggle_fullscreen', 'exit_fullscreen',
+            'show_navigation', 'hide_navigation',
+            'show_information', 'hide_information'
+        ]
         
         # キーイベントロック状態
         self._key_event_locked = False
@@ -303,6 +310,17 @@ class EventHandler:
                 # エラーが発生した場合でも必ずロック解除
                 self.unlock_navigation_events()
                 return False
+        
+        # UI操作系アクション（フルスクリーンなど）の特別処理
+        if action in self._ui_actions:
+            log_print(DEBUG, f"UI操作アクション '{action}' を検出（ロック対象外）")
+            self._last_key_action = action
+            
+            # UIアクションはナビゲーションロック対象外として扱う
+            if action in self.callbacks:
+                log_print(INFO, f"UI操作アクション実行: {action}")
+                event.accept()
+                return self.callbacks[action]()
         
         # 非ナビゲーションキーの処理
         if action:

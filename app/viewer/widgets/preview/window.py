@@ -905,6 +905,16 @@ class ImagePreviewWindow(QMainWindow):
 
     def _on_toggle_fullscreen(self):
         """フルスクリーンモードの切り替え"""
+        # フルスクリーン切り替え時に、もしナビゲーションロックがあれば解除する
+        if hasattr(self, 'event_handler') and self.event_handler:
+            # ナビゲーション処理中フラグをリセット（念のため）
+            self.event_handler._navigation_in_progress = False
+            
+            # ロックされている場合のみ解除（不要なシグナル解除を防止）
+            if self.event_handler.is_navigation_locked():
+                log_print(INFO, "フルスクリーン切り替え時にナビゲーションロックを解除します")
+                self.event_handler.unlock_navigation_events()
+
         if self.isFullScreen():
             self.showNormal()
             self.statusbar.showMessage("ウィンドウモードに戻りました")
