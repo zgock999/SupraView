@@ -682,10 +682,10 @@ class ImagePreviewWindow(QMainWindow):
     # イベント処理方法
     def keyPressEvent(self, event: QKeyEvent):
         """キーが押されたときのイベント処理"""
-        # 画像更新中はイベントを無視
+        # 画像更新中はイベントを無視（すべてのキーを無視）
         if self._is_updating_images:
-            log_print(DEBUG, "画像更新中のため、キーイベントを無視します")
-            event.accept()  # イベント処理済みとしてマーク
+            log_print(DEBUG, f"画像更新中のため、キーイベントをウィンドウレベルでブロック: キーコード {event.key()}")
+            event.accept()  # イベントを処理済みとしてマーク
             return
         
         # イベントハンドラに処理を委譲

@@ -95,8 +95,8 @@ class EventHandler:
         """
         # 親ウィンドウが画像更新中かチェック
         if hasattr(self.parent, '_is_updating_images') and self.parent._is_updating_images:
-            log_print(DEBUG, "画像更新中のため、キーイベント処理をスキップします")
-            return True  # イベントを処理済みとしてマーク
+            log_print(DEBUG, f"画像更新中のため、キーイベント処理をスキップします: キーコード {event.key()}")
+            return True  # イベントを処理済みとしてマーク（すべてのキーを無視）
         
         key = event.key()
         
