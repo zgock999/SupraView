@@ -63,6 +63,9 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
         # 遅延リクエスト用のキュー
         self._delayed_sr_requests = {}  # {index: current_path}
         
+        # 現在の画像パス（インデックスごと）を保存するディクショナリを追加
+        self._current_image_paths = {0: None, 1: None}
+        
         log_print(DEBUG, f"ImageHandler: 初期化完了 (モデル参照: {self.image_model is not None})")
     
     def load_image_from_path(self, path: str, index: int = 0, use_browser_path: bool = False) -> bool:
@@ -215,6 +218,13 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             if self.image_model:
                 # 画像モデルに情報を設定（内部でmodifiedとdisplay_update_neededフラグが立つ）
                 self.image_model.set_image(index, pixmap, image_data, numpy_array, info, path)
+                
+                # 現在のパスを保存（後で整合性チェックに使用）
+                self._current_image_paths[index] = path
+                
+                # 画像モデルにもパス情報を保存
+                if self.image_model:
+                    self.image_model.set_image_property(index, 'path', path)
                 
                 # 既存の超解像リクエストがあればキャンセル
                 if self.sr_manager and self.image_model.has_sr_request(index):
@@ -539,6 +549,18 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
             filename = os.path.basename(path)
             self._show_status_message(f"超解像処理を開始しています: {filename}...")
             
+            # 超解像処理実行前に、現在の画像パスを確認して保存
+            if path != self._current_image_paths.get(index):
+                log_print(DEBUG, f"現在のパス情報を更新: {path} (旧: {self._current_image_paths.get(index)})")
+                self._current_image_paths[index] = path
+                
+            # モデルにもパス情報を保存して整合性を確保
+            if self.image_model:
+                current_model_path = self.image_model.get_image_property(index, 'path')
+                if current_model_path != path:
+                    log_print(DEBUG, f"モデルのパス情報を更新: {path} (旧: {current_model_path})")
+                    self.image_model.set_image_property(index, 'path', path)
+            
             # 超解像処理用のコールバックを定義
             def _internal_callback(request_id, processed_array):
                 """コールバックのセーフラッパー"""
@@ -608,6 +630,33 @@ class ImageHandler(QObject):  # QObjectを継承して明示的にオブジェ�
                 self._show_status_message("超解像処理に失敗しました")
                 return
                 
+            # 画像パスの整合性を検証 - Noneの場合の適切な処理を追加
+            path_at_request = self.image_model.get_image_property(target_index, 'path')
+            current_path = self._current_image_paths[target_index]
+            
+            # パス比較ロジックの改善
+            if path_at_request is None and current_path is not None:
+                # モデルのパスプロパティが未設定の場合は、現在のパスを基準とする
+                log_print(DEBUG, f"モデルのパスプロパティが未設定のため、現在のパスを使用: {current_path}")
+                
+                # 整合性確保のため、モデルにパスを設定
+                self.image_model.set_image_property(target_index, 'path', current_path)
+                path_at_request = current_path
+            elif current_path is None and path_at_request is not None:
+                # キャッシュ側のパスがない場合はモデルのパスを使う
+                log_print(DEBUG, f"キャッシュのパスが未設定のため、モデルのパスを使用: {path_at_request}")
+                self._current_image_paths[target_index] = path_at_request
+                current_path = path_at_request
+            
+            # 詳細なデバッグ情報を出力
+            log_print(DEBUG, f"パス比較: モデル={path_at_request}, キャッシュ={current_path}")
+            
+            # パスが一致しない場合のみ警告
+            if path_at_request is not None and current_path is not None and path_at_request != current_path:
+                log_print(WARNING, f"画像パス不一致: 超解像結果を無視します (index={target_index}, パス={path_at_request}, 現在={current_path})")
+                self._show_status_message("画像変更のため超解像処理結果を適用できません")
+                return
+            
             # ※※※ 新規コード追加：エラーがある場合は超解像処理結果を破棄 ※※※
             if self.image_model.has_error(target_index):
                 log_print(WARNING, f"インデックス {target_index} にエラーがあるため、超解像処理結果を破棄します")

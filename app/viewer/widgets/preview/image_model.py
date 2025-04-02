@@ -26,7 +26,11 @@ except ImportError:
 
 
 class ImageModel:
-    """プレビューウィンドウ内の画像情報を管理するモデルクラス"""
+    """
+    画像データと表示設定を管理するモデルクラス
+    
+    複数の画像データと関連するメタデータを保持し、表示に関する状態を管理します。
+    """
     
     def __init__(self):
         """モデルの初期化"""
@@ -66,6 +70,12 @@ class ImageModel:
         self._browser_pages = 1          # ブラウザ表示ページ数（デフォルトは1）
         self._browser_shift = False      # ブラウザシフトモード
         self._right_to_left = False      # 右から左への表示（デフォルトは左から右）
+        
+        # 画像に関するプロパティ（メタデータや状態）
+        self._image_properties = [
+            {'sr_request': None, 'display_update': False, 'error': None, 'path': None},
+            {'sr_request': None, 'display_update': False, 'error': None, 'path': None}
+        ]
         
         log_print(DEBUG, "ImageModel: 初期化されました")
     
@@ -273,7 +283,7 @@ class ImageModel:
                     # ディレクトリ情報を抽出
                     if not directory_info and path:
                         directory = os.path.dirname(path)
-                        if directory:
+                        if (directory):
                             directory_info = f"[{directory}]"
                     
                     # エラー情報を含むステータステキスト
@@ -844,6 +854,38 @@ class ImageModel:
         
         log_print(DEBUG, f"ImageModel: インデックス {index} のエラー情報をクリアしました")
         return True
+    
+    def set_image_property(self, index: int, key: str, value: Any) -> bool:
+        """
+        画像プロパティを設定
+        
+        Args:
+            index: 画像インデックス
+            key: プロパティキー
+            value: 設定値
+            
+        Returns:
+            bool: 設定に成功した場合はTrue
+        """
+        if 0 <= index < 2 and key in self._image_properties[index]:
+            self._image_properties[index][key] = value
+            return True
+        return False
+    
+    def get_image_property(self, index: int, key: str) -> Any:
+        """
+        画像プロパティを取得
+        
+        Args:
+            index: 画像インデックス
+            key: プロパティキー
+            
+        Returns:
+            Any: プロパティ値、存在しない場合はNone
+        """
+        if 0 <= index < 2 and key in self._image_properties[index]:
+            return self._image_properties[index][key]
+        return None
     
     def __del__(self):
         """

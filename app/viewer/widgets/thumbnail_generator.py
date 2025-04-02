@@ -255,36 +255,44 @@ class ThumbnailGenerator:
                 on_all_completed()
             return
         
-        # 明示的にキャンセル要求されていない場合（フォーカス移動などによる）は、
-        # 新しいサムネイル生成を開始する前に既存のタスクをキャンセルする
-        if self._explicit_cancel_requested:
-            # 明示的なキャンセル要求があった場合は、既存のタスクをキャンセルして新しいタスクを開始
-            self.cancel_current_task(explicit_cancel=True)
-        else:
-            # フォーカス移動などによるキャンセルの場合は、明示的なキャンセルではないことを指定
-            self.cancel_current_task(explicit_cancel=False)
+        # スレッドセーフなキャンセル処理
+        try:
+            # 明示的にキャンセル要求されていない場合（フォーカス移動などによる）は、
+            # 新しいサムネイル生成を開始する前に既存のタスクをキャンセルする
+            if self._explicit_cancel_requested:
+                # 明示的なキャンセル要求があった場合は、既存のタスクをキャンセルして新しいタスクを開始
+                self.cancel_current_task(explicit_cancel=True)
+            else:
+                # フォーカス移動などによるキャンセルの場合は、明示的なキャンセルではないことを指定
+                self.cancel_current_task(explicit_cancel=False)
+            
+            # 明示的キャンセルフラグをリセット
+            self._explicit_cancel_requested = False
+            
+            # 現在のコンテキスト情報を保存（コンテキスト変更検出用）
+            self._context_current_directory = current_directory
+            
+            # 画像ファイルだけをフィルタリング
+            image_files = [
+                item['name'] for item in file_items 
+                if not item.get('is_dir', False) and self.can_generate_thumbnail(item['name'])
+            ]
+            
+            if not image_files:
+                # 画像ファイルがない場合は完了を通知して終了
+                log_print(INFO, "サムネイル生成対象の画像ファイルがありません。")
+                if on_all_completed:
+                    on_all_completed()
+                return
+            
+            # 常にデバッグ情報を出力（debug_modeに関わらず）
+            log_print(INFO, f"サムネイル生成開始: {len(image_files)}ファイル、現在ディレクトリ: '{current_directory}'")
         
-        # 明示的キャンセルフラグをリセット
-        self._explicit_cancel_requested = False
-        
-        # 現在のコンテキスト情報を保存（コンテキスト変更検出用）
-        self._context_current_directory = current_directory
-        
-        # 画像ファイルだけをフィルタリング
-        image_files = [
-            item['name'] for item in file_items 
-            if not item.get('is_dir', False) and self.can_generate_thumbnail(item['name'])
-        ]
-        
-        if not image_files:
-            # 画像ファイルがない場合は完了を通知して終了
-            log_print(INFO, "サムネイル生成対象の画像ファイルがありません。")
+        except Exception as e:
+            log_print(ERROR, f"サムネイル生成の準備段階でエラーが発生しました: {e}")
             if on_all_completed:
                 on_all_completed()
             return
-        
-        # 常にデバッグ情報を出力（debug_modeに関わらず）
-        log_print(INFO, f"サムネイル生成開始: {len(image_files)}ファイル、現在ディレクトリ: '{current_directory}'")
         
         try:
             # シーケンシャルエクストラクタを作成

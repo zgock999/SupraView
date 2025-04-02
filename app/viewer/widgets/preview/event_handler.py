@@ -5,9 +5,10 @@
 """
 
 from typing import Dict, Callable, Any, Optional
+import time  # 時間計測用に追加
 from PySide6.QtCore import Qt, QPoint, QEvent
 from PySide6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent, QContextMenuEvent
-from logutils import log_print, DEBUG, INFO, WARNING
+from logutils import log_print, DEBUG, INFO, WARNING, ERROR
 
 
 class EventHandler:
@@ -27,6 +28,29 @@ class EventHandler:
         
         # キーマッピングの初期化（標準モード）
         self._init_key_mappings()
+        
+        # 前回のアクション記録用（間引き処理は削除するが、デバッグ用に残す）
+        self._last_key_action = None
+        
+        # 移動系アクション（ナビゲーションロック対象）
+        self._navigation_actions = [
+            'next_image', 'prev_image',
+            'first_folder_image', 'last_folder_image',
+            'next_folder', 'prev_folder', 
+            'first_image', 'last_image'
+        ]
+        
+        # キーイベントロック状態
+        self._key_event_locked = False
+        
+        # ナビゲーション処理中フラグ
+        self._navigation_in_progress = False  # ナビゲーション処理中フラグ
+        
+        # ナビゲーションバーのシグナル接続状態を管理
+        self._navigation_signals_connected = True
+        
+        # ナビゲーションバーのシグナル情報を保持
+        self._navigation_signals = []
     
     def _init_key_mappings(self):
         """キーマッピングの初期化"""
@@ -83,6 +107,112 @@ class EventHandler:
             return True
         return False
     
+    def register_navigation_bar_signals(self, navigation_bar):
+        """
+        ナビゲーションバーのシグナル情報を登録
+        
+        Args:
+            navigation_bar: ナビゲーションバーのインスタンス
+        """
+        # シグナル情報を保存
+        self._navigation_signals = [
+            (navigation_bar.first_image_requested, navigation_bar._on_first_image_clicked),
+            (navigation_bar.prev_image_requested, navigation_bar._on_prev_image_clicked),
+            (navigation_bar.next_image_requested, navigation_bar._on_next_image_clicked),
+            (navigation_bar.last_image_requested, navigation_bar._on_last_image_clicked),
+            (navigation_bar.prev_folder_requested, navigation_bar._on_prev_folder_clicked),
+            (navigation_bar.next_folder_requested, navigation_bar._on_next_folder_clicked),
+            (navigation_bar.first_folder_requested, navigation_bar._on_first_folder_clicked),
+            (navigation_bar.last_folder_requested, navigation_bar._on_last_folder_clicked)
+        ]
+        
+        log_print(DEBUG, "ナビゲーションバーのシグナル情報を登録しました")
+    
+    def disconnect_navigation_signals(self):
+        """ナビゲーションバーのシグナルを一時的に解除"""
+        if not self._navigation_signals_connected:
+            return
+            
+        # ナビゲーションバーとの接続を解除
+        if hasattr(self.parent, 'navigation_bar'):
+            nav_bar = self.parent.navigation_bar
+            
+            # ボタンとシグナルの接続を解除
+            try:
+                nav_bar.first_image_button.clicked.disconnect()
+                nav_bar.first_folder_button.clicked.disconnect()
+                nav_bar.prev_folder_button.clicked.disconnect()
+                nav_bar.prev_image_button.clicked.disconnect()
+                nav_bar.next_image_button.clicked.disconnect()
+                nav_bar.last_folder_button.clicked.disconnect()
+                nav_bar.next_folder_button.clicked.disconnect()
+                nav_bar.last_image_button.clicked.disconnect()
+                
+                self._navigation_signals_connected = False
+                log_print(INFO, "ナビゲーションバーのシグナルを解除しました")
+            except Exception as e:
+                log_print(ERROR, f"ナビゲーションシグナルの解除中にエラーが発生: {e}")
+    
+    def reconnect_navigation_signals(self):
+        """ナビゲーションバーのシグナルを再接続"""
+        if self._navigation_signals_connected:
+            return
+            
+        # ナビゲーションバーとの接続を再確立
+        if hasattr(self.parent, 'navigation_bar'):
+            nav_bar = self.parent.navigation_bar
+            
+            # ボタンとシグナルを再接続
+            try:
+                if hasattr(nav_bar, 'set_right_to_left_mode'):
+                    # RTLモードに応じた接続を再確立
+                    rtl_mode = nav_bar._right_to_left
+                    nav_bar.set_right_to_left_mode(rtl_mode)
+                    self._navigation_signals_connected = True
+                    log_print(INFO, f"ナビゲーションバーのシグナルを再接続しました (RTL: {rtl_mode})")
+                else:
+                    log_print(WARNING, "ナビゲーションバーにset_right_to_left_modeメソッドが見つかりません")
+            except Exception as e:
+                log_print(ERROR, f"ナビゲーションシグナルの再接続中にエラーが発生: {e}")
+    
+    def lock_navigation_events(self):
+        """
+        移動系キーイベントをロック（画像更新中にキー入力を防止）
+        """
+        self._key_event_locked = True
+        self.disconnect_navigation_signals()  # シグナルも解除
+        
+        # ApplicationレベルでQtのイベントキューをクリア
+        self.clear_pending_events()
+        
+        log_print(INFO, "キーイベントとナビゲーションシグナルをロックしました（画像更新中）")
+    
+    def unlock_navigation_events(self):
+        """
+        移動系キーイベントのロックを解除（画像更新完了後に呼び出される）
+        """
+        # 両方のロックを解除
+        self._key_event_locked = False
+        self._navigation_in_progress = False
+        self.clear_pending_events()
+        self.reconnect_navigation_signals()  # シグナルを再接続
+        log_print(INFO, "キーイベントとナビゲーションシグナルのロックを解除しました（画像更新完了）")
+    
+    def is_navigation_locked(self):
+        """
+        キーイベントがロックされているか確認
+        
+        Returns:
+            bool: ロックされている場合はTrue
+        """
+        # 親ウィンドウの画像更新状態も確認
+        is_updating = False
+        if hasattr(self.parent, '_is_updating_images'):
+            is_updating = self.parent._is_updating_images
+        
+        # 明示的なロックか、画像更新中の場合はロック状態と判断
+        return self._key_event_locked or is_updating
+    
     def handle_key_press(self, event: QKeyEvent) -> bool:
         """
         キー押下イベントの処理
@@ -93,12 +223,15 @@ class EventHandler:
         Returns:
             bool: イベントを処理した場合はTrue
         """
-        # 親ウィンドウが画像更新中かチェック
-        if hasattr(self.parent, '_is_updating_images') and self.parent._is_updating_images:
-            log_print(DEBUG, f"画像更新中のため、キーイベント処理をスキップします: キーコード {event.key()}")
-            return True  # イベントを処理済みとしてマーク（すべてのキーを無視）
-        
         key = event.key()
+        
+        # デバッグログ - 最初にキー入力をログ出力
+        log_print(DEBUG, f"キー入力を検出: キーコード {key}")
+        
+        # ナビゲーション処理中やロック中の場合は即座に廃棄
+        if self._navigation_in_progress or self.is_navigation_locked():
+            log_print(DEBUG, f"ナビゲーション処理中またはロック中のため、キー入力 {key} を廃棄")
+            return True  # イベントを消費
         
         # 右から左モードの場合は左右反転したキーマッピングを使用
         key_map = self.rtl_key_mapping if hasattr(self.parent, '_right_to_left') and self.parent._right_to_left else self.key_mapping
@@ -106,9 +239,77 @@ class EventHandler:
         # キーに対応するアクションを検索
         action = key_map.get(key)
         
-        # デバッグログ出力を修正 - アクションにマッピングされなくてもログ出力する
+        # ナビゲーションキーかどうかを確認
+        if action in self._navigation_actions:
+            # 既にナビゲーション処理中か更新中なら処理しない
+            if self._navigation_in_progress or self.is_navigation_locked():
+                log_print(INFO, f"ナビゲーション処理中または画像更新中のため、キー入力をスキップします: キーコード {key}, アクション {action}")
+                event.accept()  # イベントを消費
+                return True
+                
+            # *** 新しい方法: 多重実行防止のために即座にシグナル接続を解除 ***
+            log_print(DEBUG, f"ナビゲーションキー検出: シグナルを即座に解除 ({key}, {action})")
+            self._navigation_in_progress = True
+            
+            # シグナルが接続されている場合のみ解除（二重解除を防止）
+            if self._navigation_signals_connected:
+                self.disconnect_navigation_signals()  # シグナルを解除
+            
+            # Page Up/Down キーを特別に処理
+            if key == Qt.Key_PageUp or key == Qt.Key_PageDown:
+                page_action = "prev_folder" if key == Qt.Key_PageUp else "next_folder"
+                log_print(INFO, f"Page {'Up' if key == Qt.Key_PageUp else 'Down'} キーを検出")
+                
+                # 最後に処理したアクションを記録（デバッグ用）
+                self._last_key_action = page_action
+                
+                # ナビゲーションイベントをロック（永続的なロックを設定）
+                self.lock_navigation_events()
+                
+                # コールバック実行
+                if page_action in self.callbacks:
+                    log_print(INFO, f"フォルダナビゲーション実行: {page_action}")
+                    
+                    # イベントを消費
+                    event.accept()
+                    
+                    try:
+                        # コールバックを実行
+                        result = self.callbacks[page_action]()
+                        return result
+                    except Exception as e:
+                        log_print(ERROR, f"コールバック実行中にエラー発生: {e}")
+                        # エラーが発生した場合でも必ずロック解除
+                        self.unlock_navigation_events()
+                        return False
+            
+            # 通常のナビゲーションアクション
+            log_print(INFO, f"キーボードナビゲーションアクション実行: {action}")
+            
+            # キーイベントをロック
+            self.lock_navigation_events()
+            
+            # イベントを消費して実行 
+            event.accept()
+            
+            try:
+                if action in self.callbacks:
+                    return self.callbacks[action]()
+                else:
+                    log_print(WARNING, f"アクション '{action}' に対応するコールバックが登録されていません")
+                    return False
+            except Exception as e:
+                log_print(ERROR, f"コールバック実行中にエラー発生: {e}")
+                # エラーが発生した場合でも必ずロック解除
+                self.unlock_navigation_events()
+                return False
+        
+        # 非ナビゲーションキーの処理
         if action:
             log_print(DEBUG, f"キー {key} は '{action}' アクションにマッピングされています")
+            
+            # 最後に処理したアクションを記録（デバッグ用）
+            self._last_key_action = action
             
             # 特別なケース: Escキーのフルスクリーン終了
             if action == 'exit_fullscreen':
@@ -234,6 +435,7 @@ class EventHandler:
             bool: イベントを処理した場合はTrue
         """
         if 'adjust_navigation_size' in self.callbacks:
+            # width引数を確実に渡すように修正
             return self.callbacks['adjust_navigation_size'](width)
             
         # イベント処理なし
@@ -255,33 +457,62 @@ class EventHandler:
         # イベント処理なし
         return False
     
-    def process_event(self, obj, event):
+    def install_global_event_filter(self, app):
         """
-        イベントフィルタ用の汎用イベント処理メソッド
+        アプリケーション全体のイベントフィルタを設定
+        
+        Args:
+            app: QApplicationインスタンス
+        """
+        # QApplicationレベルのイベントフィルタを設定
+        app.installEventFilter(self)
+        log_print(INFO, "グローバルイベントフィルタを設定しました")
+    
+    def eventFilter(self, obj, event):
+        """
+        QObjectのイベントをフィルタリング
         
         Args:
             obj: イベントを受信したオブジェクト
-            event: 発生したイベント
+            event: イベント
             
         Returns:
+            イベントを処理した場合はTrue
         """
-        event_type = event.type()
+        # キープレスイベントを処理
+        if event.type() == QEvent.KeyPress:
+            key = event.key()
+            
+            # Page Up/Downキーを特別に処理 - ナビゲーション処理中/ロック中は全て廃棄
+            if key == Qt.Key_PageUp or key == Qt.Key_PageDown:
+                if self._navigation_in_progress or self.is_navigation_locked():
+                    log_print(INFO, f"Page{'Up' if key == Qt.Key_PageUp else 'Down'}キーをイベントフィルタで廃棄: ナビゲーションロック中")
+                    return True  # イベントを消費(廃棄)
+            
+            # その他のナビゲーションキーもチェック
+            action = None
+            if hasattr(self.parent, '_right_to_left') and self.parent._right_to_left:
+                action = self.rtl_key_mapping.get(key)
+            else:
+                action = self.key_mapping.get(key)
+            
+            if action in self._navigation_actions:
+                if self._navigation_in_progress or self.is_navigation_locked():
+                    log_print(INFO, f"ナビゲーションキー ({key}:{action}) をイベントフィルタで廃棄: ロック中")
+                    return True  # イベントを消費(廃棄)
         
-        if event_type == QEvent.FocusIn:
-            log_print(DEBUG, f"フォーカスイン: {obj}")
-            return False  # イベントを伝搬
-        
-        elif event_type == QEvent.FocusOut:
-            log_print(DEBUG, f"フォーカスアウト: {obj}")
-            return False  # イベントを伝搬
-        
-        elif event_type == QEvent.KeyPress:
-            log_print(DEBUG, f"キープレスイベント: {event.key()}, ウィジェット: {obj}")
-            # ここではキー処理はせず、親ウィジェットのkeyPressEventが呼ばれるようにする
-            return False  # イベントを伝搬
-        
-        # デフォルトでは処理しない
+        # デフォルト処理 (イベントを通過させる)
         return False
+    
+    def clear_pending_events(self):
+        """Qtのイベントキューから保留中のキーイベントをクリア"""
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QEvent
+        
+        # 仮のイベント処理でキューをフラッシュ
+        QApplication.processEvents()
+        
+        log_print(DEBUG, "ペンディング中のイベントをクリアしました")
     
     def handle_show_event(self, event):
         """

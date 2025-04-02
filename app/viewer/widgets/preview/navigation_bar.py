@@ -6,7 +6,7 @@
 
 import os
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QStyle, QApplication
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QSize
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QSize, QThread
 from PySide6.QtGui import QEnterEvent, QFont, QIcon, QCursor
 
 from logutils import log_print, INFO, DEBUG
@@ -74,7 +74,9 @@ class NavigationBar(QWidget):
         self._check_mouse_timer = QTimer(self)
         self._check_mouse_timer.setInterval(500)  # 500ミリ秒ごとにチェック
         self._check_mouse_timer.timeout.connect(self._check_mouse_position)
-        self._check_mouse_timer.start()
+        
+        # UI構築が終わってから、メインスレッドでタイマーを開始
+        QTimer.singleShot(0, self._check_mouse_timer.start)
     
     def _setup_ui(self):
         """UIコンポーネントをセットアップ"""
@@ -164,15 +166,15 @@ class NavigationBar(QWidget):
         layout.addStretch(1)
         
         # シグナルとスロットを接続
-        self.first_image_button.clicked.connect(self.first_image_requested)
-        self.first_folder_button.clicked.connect(self.first_folder_requested)
-        self.prev_folder_button.clicked.connect(self.prev_folder_requested)
-        self.prev_image_button.clicked.connect(self.prev_image_requested)
-        self.fullscreen_button.clicked.connect(self.toggle_fullscreen_requested)
-        self.next_image_button.clicked.connect(self.next_image_requested)
-        self.last_folder_button.clicked.connect(self.last_folder_requested)
-        self.next_folder_button.clicked.connect(self.next_folder_requested)
-        self.last_image_button.clicked.connect(self.last_image_requested)
+        self.first_image_button.clicked.connect(self._on_first_image_clicked)
+        self.first_folder_button.clicked.connect(self._on_first_folder_clicked)
+        self.prev_folder_button.clicked.connect(self._on_prev_folder_clicked)
+        self.prev_image_button.clicked.connect(self._on_prev_image_clicked)
+        self.fullscreen_button.clicked.connect(self._on_fullscreen_clicked)
+        self.next_image_button.clicked.connect(self._on_next_image_clicked)
+        self.last_folder_button.clicked.connect(self._on_last_folder_clicked)
+        self.next_folder_button.clicked.connect(self._on_next_folder_clicked)
+        self.last_image_button.clicked.connect(self._on_last_image_clicked)
         
         # モダンなアイコンボタン用のスタイルシート - 白い半透明背景と縁取りを追加
         self.setStyleSheet("""
@@ -200,6 +202,34 @@ class NavigationBar(QWidget):
             }
         """)
     
+    # クリックハンドラを追加（シグナル再接続用）
+    def _on_first_image_clicked(self):
+        self.first_image_requested.emit()
+    
+    def _on_first_folder_clicked(self):
+        self.first_folder_requested.emit()
+    
+    def _on_prev_folder_clicked(self):
+        self.prev_folder_requested.emit()
+    
+    def _on_prev_image_clicked(self):
+        self.prev_image_requested.emit()
+    
+    def _on_fullscreen_clicked(self):
+        self.toggle_fullscreen_requested.emit()
+    
+    def _on_next_image_clicked(self):
+        self.next_image_requested.emit()
+    
+    def _on_last_folder_clicked(self):
+        self.last_folder_requested.emit()
+    
+    def _on_next_folder_clicked(self):
+        self.next_folder_requested.emit()
+    
+    def _on_last_image_clicked(self):
+        self.last_image_requested.emit()
+    
     def _setup_tooltips(self):
         """ボタンのツールチップを設定"""
         self.first_image_button.setToolTip("全体の先頭画像へ移動 (Home)")
@@ -222,26 +252,28 @@ class NavigationBar(QWidget):
         if self._right_to_left != enabled:
             self._right_to_left = enabled
             
+            # いったん全てのボタンをクリックシグナルから切り離す
+            self.first_image_button.clicked.disconnect()
+            self.first_folder_button.clicked.disconnect()
+            self.prev_folder_button.clicked.disconnect()
+            self.prev_image_button.clicked.disconnect()
+            self.fullscreen_button.clicked.disconnect()
+            self.next_image_button.clicked.disconnect()
+            self.last_folder_button.clicked.disconnect()
+            self.next_folder_button.clicked.disconnect()
+            self.last_image_button.clicked.disconnect()
+            
             if enabled:
-                # 右から左モード: ボタン機能を反転
-                self.first_image_button.clicked.disconnect()
-                self.first_folder_button.clicked.disconnect()
-                self.prev_folder_button.clicked.disconnect()
-                self.prev_image_button.clicked.disconnect()
-                self.next_image_button.clicked.disconnect()
-                self.last_folder_button.clicked.disconnect()
-                self.next_folder_button.clicked.disconnect()
-                self.last_image_button.clicked.disconnect()
-                
-                # 反転した接続
-                self.first_image_button.clicked.connect(self.last_image_requested)
-                self.first_folder_button.clicked.connect(self.last_folder_requested)
-                self.prev_folder_button.clicked.connect(self.next_folder_requested)
-                self.prev_image_button.clicked.connect(self.next_image_requested)
-                self.next_image_button.clicked.connect(self.prev_image_requested)
-                self.last_folder_button.clicked.connect(self.first_folder_requested)
-                self.next_folder_button.clicked.connect(self.prev_folder_requested)
-                self.last_image_button.clicked.connect(self.first_image_requested)
+                # 右から左モード: ボタンの接続を反転
+                self.first_image_button.clicked.connect(self._on_last_image_clicked)
+                self.first_folder_button.clicked.connect(self._on_last_folder_clicked)
+                self.prev_folder_button.clicked.connect(self._on_next_folder_clicked)
+                self.prev_image_button.clicked.connect(self._on_next_image_clicked)
+                self.fullscreen_button.clicked.connect(self._on_fullscreen_clicked)
+                self.next_image_button.clicked.connect(self._on_prev_image_clicked)
+                self.last_folder_button.clicked.connect(self._on_first_folder_clicked)
+                self.next_folder_button.clicked.connect(self._on_prev_folder_clicked)
+                self.last_image_button.clicked.connect(self._on_first_image_clicked)
                 
                 # ツールチップも反転
                 self.first_image_button.setToolTip("全体の最後の画像へ移動 (End)")
@@ -254,24 +286,15 @@ class NavigationBar(QWidget):
                 self.last_image_button.setToolTip("全体の先頭画像へ移動 (Home)")
             else:
                 # 左から右モード（通常）: 元の接続に戻す
-                self.first_image_button.clicked.disconnect()
-                self.first_folder_button.clicked.disconnect()
-                self.prev_folder_button.clicked.disconnect()
-                self.prev_image_button.clicked.disconnect()
-                self.next_image_button.clicked.disconnect()
-                self.last_folder_button.clicked.disconnect()
-                self.next_folder_button.clicked.disconnect()
-                self.last_image_button.clicked.disconnect()
-                
-                # 通常の接続
-                self.first_image_button.clicked.connect(self.first_image_requested)
-                self.first_folder_button.clicked.connect(self.first_folder_requested)
-                self.prev_folder_button.clicked.connect(self.prev_folder_requested)
-                self.prev_image_button.clicked.connect(self.prev_image_requested)
-                self.next_image_button.clicked.connect(self.next_image_requested)
-                self.last_folder_button.clicked.connect(self.last_folder_requested)
-                self.next_folder_button.clicked.connect(self.next_folder_requested)
-                self.last_image_button.clicked.connect(self.last_image_requested)
+                self.first_image_button.clicked.connect(self._on_first_image_clicked)
+                self.first_folder_button.clicked.connect(self._on_first_folder_clicked)
+                self.prev_folder_button.clicked.connect(self._on_prev_folder_clicked)
+                self.prev_image_button.clicked.connect(self._on_prev_image_clicked)
+                self.fullscreen_button.clicked.connect(self._on_fullscreen_clicked)
+                self.next_image_button.clicked.connect(self._on_next_image_clicked)
+                self.last_folder_button.clicked.connect(self._on_last_folder_clicked)
+                self.next_folder_button.clicked.connect(self._on_next_folder_clicked)
+                self.last_image_button.clicked.connect(self._on_last_image_clicked)
                 
                 # 通常のツールチップ
                 self.first_image_button.setToolTip("全体の先頭画像へ移動 (Home)")
@@ -315,8 +338,13 @@ class NavigationBar(QWidget):
             QApplication.processEvents()
             log_print(DEBUG, "ナビゲーションバーを表示")
         
-        # 自動非表示タイマーをリセット
-        self._hide_timer.stop()
+        # 自動非表示タイマーをリセット - スレッドセーフに
+        if QThread.currentThread() == self.thread():
+            # 同じスレッドの場合は直接停止
+            self._hide_timer.stop()
+        else:
+            # 別スレッドの場合はsingleShotを使って停止
+            QTimer.singleShot(0, self._hide_timer.stop)
     
     def _hide_bar(self):
         """バーを非表示"""
@@ -328,8 +356,11 @@ class NavigationBar(QWidget):
                 detection_area_height = int(parent_height * self._detection_area_ratio)
                 
                 if (parent_height - detection_area_height) < mouse_pos.y() < parent_height:
-                    # まだ検出エリア内にいるので、タイマーをリセットして表示を維持
-                    self._hide_timer.start(1500)
+                    # まだ検出エリア内にいるので、タイマーをリセットして表示を維持 - スレッドセーフに
+                    if QThread.currentThread() == self.thread():
+                        self._hide_timer.start(1500)
+                    else:
+                        QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
                     return
             
             self._visible = False
@@ -378,8 +409,11 @@ class NavigationBar(QWidget):
             if not self._visible or not self.isVisible():
                 self.show_bar()
         elif self._visible and not self._hide_timer.isActive():
-            # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始
-            self._hide_timer.start(1500)  # 1.5秒後に非表示
+            # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始 - スレッドセーフに
+            if QThread.currentThread() == self.thread():
+                self._hide_timer.start(1500)  # 1.5秒後に非表示
+            else:
+                QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
     
     def eventFilter(self, watched, event):
         """
@@ -405,32 +439,65 @@ class NavigationBar(QWidget):
                     self.show_bar()
                     log_print(DEBUG, f"マウス検出: y={mouse_y}, 検出エリア: {parent_height-detection_area_height}-{parent_height}")
             elif self._visible and not self._hide_timer.isActive():
-                # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始
-                self._hide_timer.start(1500)  # 1.5秒後に非表示
+                # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始 - スレッドセーフに
+                if QThread.currentThread() == self.thread():
+                    self._hide_timer.start(1500)  # 1.5秒後に非表示
+                else:
+                    QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
         
         # イベントはそのまま親ウィジェットに渡す
         return super().eventFilter(watched, event)
     
     def enterEvent(self, event):
         """マウスがウィジェットに入った時の処理"""
-        # 自動非表示タイマーを停止
-        self._hide_timer.stop()
+        # 自動非表示タイマーを停止 - スレッドセーフに
+        if QThread.currentThread() == self.thread():
+            self._hide_timer.stop()
+        else:
+            QTimer.singleShot(0, self._hide_timer.stop)
         super().enterEvent(event)
     
     def leaveEvent(self, event):
         """マウスがウィジェットから出た時の処理"""
-        # 1.5秒後に非表示
-        self._hide_timer.start(1500)
+        # 1.5秒後に非表示 - スレッドセーフに
+        if QThread.currentThread() == self.thread():
+            self._hide_timer.start(1500)
+        else:
+            QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
         super().leaveEvent(event)
     
     def stop_timers(self):
         """全てのタイマーを停止"""
         # 自動非表示タイマーを停止
         if self._hide_timer and self._hide_timer.isActive():
-            self._hide_timer.stop()
+            if QThread.currentThread() == self.thread():
+                self._hide_timer.disconnect()
+                self._hide_timer.stop()
+            else:
+                QTimer.singleShot(0, lambda: self._hide_timer.disconnect())
+                QTimer.singleShot(0, self._hide_timer.stop)
         
         # マウス位置チェックタイマーを停止
         if self._check_mouse_timer and self._check_mouse_timer.isActive():
-            self._check_mouse_timer.stop()
+            if QThread.currentThread() == self.thread():
+                self._check_mouse_timer.disconnect()
+                self._check_mouse_timer.stop()
+            else:
+                QTimer.singleShot(0, lambda: self._check_mouse_timer.disconnect())
+                QTimer.singleShot(0, self._check_mouse_timer.stop)
         
         log_print(DEBUG, "ナビゲーションバーの全タイマーが停止されました")
+
+    def closeEvent(self, event):
+        """ウィジェット終了時の処理"""
+        # タイマーをすべて停止
+        self.stop_timers()
+        super().closeEvent(event)
+        
+    def __del__(self):
+        """オブジェクト破棄時の処理"""
+        try:
+            self.stop_timers()
+            log_print(DEBUG, "ナビゲーションバーのデストラクタが呼ばれました")
+        except:
+            pass

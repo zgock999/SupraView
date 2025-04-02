@@ -15,7 +15,7 @@ from logutils import log_print, DEBUG, INFO, WARNING, ERROR
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QObject, QThread
+from PySide6.QtCore import QObject, QThread, QTimer
 
 from sr.sr_base import SuperResolutionBase, SRMethod, SRResult
 from sr.sr_utils import is_cuda_available, get_gpu_info, get_sr_method_from_string
@@ -88,6 +88,18 @@ class EnhancedSRManager(SuperResolutionManager):
         self._task_dict = {}  # タスク辞書 {request_id: (task_info)}
         self._processing_lock = threading.Lock()  # 処理ロック
         self._current_thread = None  # 現在実行中のスレッド
+        
+        # 同時実行制限 - 1つのタスクのみ許可（同時実行を禁止）
+        self._is_processing = False  # 処理中フラグ
+
+        # キャンセル済みタスクの管理用のセット（シンプル化）
+        self._cancelled_task_ids = set()
+        
+        # クリーンアップ用タイマー - コード簡素化のため頻度を下げる
+        self._cancel_cleanup_timer = QTimer()
+        self._cancel_cleanup_timer.setInterval(30000)  # 30秒ごとにチェック（非頻繁でOK）
+        self._cancel_cleanup_timer.timeout.connect(self._cleanup_cancelled_tasks)
+        self._cancel_cleanup_timer.start()
     
     def set_callbacks(self, progress_callback: Callable[[str], None] = None, 
                      completion_callback: Callable[[bool], None] = None, 
@@ -453,12 +465,15 @@ class EnhancedSRManager(SuperResolutionManager):
             'callback': callback,   # コールバック関数
             'thread': None,         # 処理スレッド（初期はNone）
             'state': TaskState.PENDING,  # 初期状態は処理待ち
-            'result': None          # 処理結果（初期はNone）
+            'result': None,         # 処理結果（初期はNone）
+            'created_at': time.time() # 作成時間を記録
         }
         
         # キューと辞書に登録
         self._task_queue.put(task_info)
         self._task_dict[request_id] = task_info
+        
+        log_print(INFO, f"超解像処理タスクをキューに追加: {request_id}")
         
         # 処理を開始
         self._process_next_task()
@@ -469,9 +484,15 @@ class EnhancedSRManager(SuperResolutionManager):
         """キューから次のタスクを処理"""
         # 処理ロックを取得
         with self._processing_lock:
-            # 現在処理中のタスクがある場合は何もしない
+            # 既に処理中の場合は何もしない
+            if self._is_processing:
+                log_print(DEBUG, "既に超解像処理中のため、新しいタスクは待機します")
+                return False
+            
+            # 現在処理中のタスクがある場合は何もしない（念のため）
             if self._current_thread is not None and self._current_thread.is_alive():
-                return
+                log_print(DEBUG, "処理中のスレッドがあります。待機します")
+                return False
             
             # 処理対象のタスクを探す
             task_to_process = None
@@ -500,10 +521,26 @@ class EnhancedSRManager(SuperResolutionManager):
             
             # 処理するタスクがなければ終了
             if task_to_process is None:
-                return
+                return False
+            
+            # このタスクがキャンセル済みかチェック
+            request_id = task_to_process['request_id']
+            if request_id in self._cancelled_task_ids:
+                log_print(INFO, f"タスク {request_id} はキャンセル済みのため、スキップします")
+                # キャンセル済みタスクは辞書からも削除
+                if request_id in self._task_dict:
+                    del self._task_dict[request_id]
+                # 次のタスクを処理
+                self._process_next_task()
+                return True
             
             # タスクの状態を処理中に更新
             task_to_process['state'] = TaskState.RUNNING
+            
+            # 処理中フラグをセット
+            self._is_processing = True
+            
+            log_print(INFO, f"超解像処理タスク {request_id} を開始します")
             
             # 処理スレッドを作成して開始
             thread = threading.Thread(
@@ -521,6 +558,8 @@ class EnhancedSRManager(SuperResolutionManager):
             
             # キューに戻す（処理中の状態で）
             self._task_queue.put(task_to_process)
+            
+            return True
     
     def _process_superres_task(self, task):
         """
@@ -533,26 +572,36 @@ class EnhancedSRManager(SuperResolutionManager):
         image = task['image']
         
         try:
-            # キャンセルチェック
-            if task['state'] == TaskState.CANCELED:
-                # タスクがキャンセルされた場合は何もせず終了
+            # キャンセルチェック - キャンセル済みの場合は早期に終了
+            if request_id in self._cancelled_task_ids or task['state'] == TaskState.CANCELED:
+                log_print(INFO, f"超解像処理タスク {request_id} はキャンセルされたため実行しません")
+                self._is_processing = False  # 処理中フラグを解除
+                self._current_thread = None
+                # 次のタスクを即時処理
+                self._process_next_task()
                 return
             
             # モデルが初期化されていない場合はエラー
             if not self.is_initialized:
+                log_print(ERROR, "超解像モデルが初期化されていません")
                 self._superres_completed(request_id, None)
                 return
             
             # 超解像処理を実行
             result = self.process(image, self._options)
             
-            # キャンセルチェック
-            if task['state'] == TaskState.CANCELED:
-                # 処理後でもタスクがキャンセルされた場合は結果を破棄
+            # キャンセルチェック - 処理後にキャンセルされていた場合も結果を破棄
+            if request_id in self._cancelled_task_ids or task['state'] == TaskState.CANCELED:
+                log_print(INFO, f"超解像処理タスク {request_id} は処理完了後にキャンセルされたため結果を破棄します")
+                self._is_processing = False  # 処理中フラグを解除
+                self._current_thread = None
+                # 次のタスクを即時処理
+                self._process_next_task()
                 return
             
             # 処理に失敗した場合
             if result is None:
+                log_print(ERROR, f"超解像処理タスク {request_id} の処理に失敗しました")
                 self._superres_completed(request_id, None)
                 return
             
@@ -567,6 +616,7 @@ class EnhancedSRManager(SuperResolutionManager):
             traceback.print_exc()
             
             # エラー発生時はNoneを結果として渡す
+            log_print(ERROR, f"超解像処理タスク {request_id} の実行中にエラーが発生: {e}")
             self._superres_completed(request_id, None)
     
     def _superres_completed(self, request_id: str, processed_image: Optional[np.ndarray]):
@@ -577,11 +627,36 @@ class EnhancedSRManager(SuperResolutionManager):
             request_id: リクエストID
             processed_image: 処理された画像、またはNone（失敗時）
         """
+        # キャンセルされたタスクの場合は結果を破棄するだけ
+        if request_id in self._cancelled_task_ids:
+            log_print(INFO, f"キャンセル済みタスク {request_id} の結果を破棄します")
+            # 処理状態フラグはリセット
+            self._is_processing = False
+            self._current_thread = None
+            
+            # キャンセルリストからは削除せず、もし辞書にあれば削除
+            if request_id in self._task_dict:
+                del self._task_dict[request_id]
+            
+            # 次のタスクを即時処理（処理が積み残らないようにする）
+            self._process_next_task()
+            return
+        
         # タスク辞書からタスク情報を取得
         if request_id not in self._task_dict:
+            log_print(WARNING, f"超解像処理タスク {request_id} が辞書に見つかりません")
+            self._is_processing = False  # 処理中フラグを解除
+            # 次のタスクを処理
+            self._current_thread = None
+            self._process_next_task()  # 遅延なしで次のタスクを実行
             return
             
         task = self._task_dict[request_id]
+        
+        # 実行時間をログ出力
+        if 'created_at' in task:
+            elapsed_time = time.time() - task['created_at']
+            log_print(INFO, f"超解像処理タスク {request_id} が完了: 処理時間={elapsed_time:.2f}秒")
         
         # タスクが実行中の場合のみ処理
         if task['state'] == TaskState.RUNNING:
@@ -593,6 +668,7 @@ class EnhancedSRManager(SuperResolutionManager):
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
+                    log_print(ERROR, f"超解像処理コールバック呼び出し中にエラー: {e}")
             
             # タスクをキューと辞書から削除
             # 辞書からの削除
@@ -615,8 +691,13 @@ class EnhancedSRManager(SuperResolutionManager):
             # キューを更新
             self._task_queue = new_queue
         
+        # 処理中フラグを解除
+        self._is_processing = False
+        
         # 次のタスクを処理
         self._current_thread = None
+        
+        # 即時に次のタスクを処理（遅延を排除）
         self._process_next_task()
     
     def cancel_superres(self, request_id: str) -> bool:
@@ -631,30 +712,49 @@ class EnhancedSRManager(SuperResolutionManager):
         """
         # リクエストIDが辞書に存在するか確認
         if request_id not in self._task_dict:
+            # すでにキャンセル済みの場合はtrueを返す（冪等性を保つ）
+            if request_id in self._cancelled_task_ids:
+                return True
+            log_print(WARNING, f"キャンセル対象の超解像処理タスク {request_id} が見つかりません")
             return False
             
         # タスク情報を取得
         task = self._task_dict[request_id]
         
-        # タスクの状態に応じた処理
-        if task['state'] == TaskState.RUNNING:
-            # 処理中のタスクはCANCELEDにし、スレッドにキャンセルを送る
-            task['state'] = TaskState.CANCELED
-            # 現在のスレッドはこのタスクのスレッドか？
-            if self._current_thread == task['thread']:
-                # 現在のスレッドをNoneに設定（次のタスク処理のため）
-                self._current_thread = None
-            return True
-        elif task['state'] == TaskState.PENDING:
-            # 処理待ちのタスクはキューと辞書から削除
-            task['state'] = TaskState.CANCELED
-            # 辞書から削除
-            del self._task_dict[request_id]
-            # キューはそのまま（取り出し時にCANCELEDをチェックしてスキップ）
-            return True
+        # キャンセル要求をマーク
+        task['state'] = TaskState.CANCELED
         
-        # 既に完了またはキャンセル済みの場合
-        return False
+        # キャンセル済みリストに追加
+        self._cancelled_task_ids.add(request_id)
+        
+        # 処理待ちの場合は辞書からも削除
+        if task['state'] == TaskState.PENDING:
+            # 処理待ちの場合は即座に削除可能（キューからは次回処理時に削除される）
+            del self._task_dict[request_id]
+        
+        log_print(INFO, f"超解像処理タスク {request_id} をキャンセル要求しました")
+        return True
+    
+    def _cleanup_cancelled_tasks(self):
+        """キャンセル済みタスクリストのクリーンアップ（低頻度でOK）"""
+        if not self._cancelled_task_ids:
+            return
+            
+        # 辞書に存在しないIDをキャンセルリストから削除
+        active_task_ids = set(self._task_dict.keys())
+        
+        # リストをコピーしてから削除（イテレーション中の変更を避けるため）
+        removed_count = 0
+        for task_id in list(self._cancelled_task_ids):
+            if task_id not in active_task_ids:
+                self._cancelled_task_ids.remove(task_id)
+                removed_count += 1
+        
+        if removed_count > 0:
+            log_print(INFO, f"キャンセル済みタスク {removed_count} 件をリストからクリーンアップしました")
+        
+        if self._cancelled_task_ids:
+            log_print(DEBUG, f"残りのキャンセル済みタスク数: {len(self._cancelled_task_ids)}")
     
     def _get_processed_options(self, method: SRMethod, user_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -868,3 +968,14 @@ class EnhancedSRManager(SuperResolutionManager):
     def get_gpu_info() -> Dict[str, Any]:
         """GPU情報を取得"""
         return get_gpu_info()
+
+    def __del__(self):
+        """デストラクタ - リソースの解放"""
+        try:
+            # タイマーの停止
+            if hasattr(self, '_cancel_cleanup_timer') and self._cancel_cleanup_timer.isActive():
+                self._cancel_cleanup_timer.stop()
+            
+        except:
+            # デコンストラクタ内の例外は無視
+            pass

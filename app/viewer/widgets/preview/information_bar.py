@@ -6,7 +6,7 @@
 
 import os
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QApplication
-from PySide6.QtCore import Qt, Signal, QTimer, QSize, QEvent
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QEvent, QThread
 from PySide6.QtGui import QFont, QCursor
 
 from logutils import log_print, INFO, DEBUG
@@ -57,7 +57,9 @@ class InformationBar(QWidget):
         self._check_mouse_timer = QTimer(self)
         self._check_mouse_timer.setInterval(500)  # 500ミリ秒ごとにチェック
         self._check_mouse_timer.timeout.connect(self._check_mouse_position)
-        self._check_mouse_timer.start()
+        
+        # UI構築が終わってから、メインスレッドでタイマーを開始
+        QTimer.singleShot(0, self._check_mouse_timer.start)
     
     def _setup_ui(self):
         """UIコンポーネントをセットアップ"""
@@ -107,8 +109,11 @@ class InformationBar(QWidget):
             # バーを表示
             self.show_bar()
             
-            # タイマーをセット（3秒後に非表示）
-            self._hide_timer.start(3000)
+            # タイマーをセット（3秒後に非表示） - スレッドセーフに
+            if QThread.currentThread() == self.thread():
+                self._hide_timer.start(3000)
+            else:
+                QTimer.singleShot(0, lambda: self._hide_timer.start(3000))
             
             log_print(DEBUG, f"インフォメーションバーに新しいテキストを設定: {text}")
     
@@ -152,8 +157,11 @@ class InformationBar(QWidget):
         
         log_print(DEBUG, "インフォメーションバーを表示")
         
-        # 自動非表示タイマーをリセット
-        self._hide_timer.stop()
+        # 自動非表示タイマーをリセット - スレッドセーフに
+        if QThread.currentThread() == self.thread():
+            self._hide_timer.stop()
+        else:
+            QTimer.singleShot(0, self._hide_timer.stop)
     
     def _hide_bar(self):
         """バーを非表示"""
@@ -165,8 +173,11 @@ class InformationBar(QWidget):
                 detection_area_height = int(parent_height * self._detection_area_ratio)
                 
                 if 0 <= mouse_pos.y() < detection_area_height:
-                    # まだ検出エリア内にいるので、タイマーをリセットして表示を維持
-                    self._hide_timer.start(1500)
+                    # まだ検出エリア内にいるので、タイマーをリセットして表示を維持 - スレッドセーフに
+                    if QThread.currentThread() == self.thread():
+                        self._hide_timer.start(1500)
+                    else:
+                        QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
                     return
             
             self._visible = False
@@ -190,8 +201,11 @@ class InformationBar(QWidget):
             if not self._visible or not self.isVisible():
                 self.show_bar()
         elif self._visible and not self._hide_timer.isActive():
-            # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始
-            self._hide_timer.start(1500)  # 1.5秒後に非表示
+            # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始 - スレッドセーフに
+            if QThread.currentThread() == self.thread():
+                self._hide_timer.start(1500)  # 1.5秒後に非表示
+            else:
+                QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
     
     def eventFilter(self, watched, event):
         """
@@ -217,32 +231,65 @@ class InformationBar(QWidget):
                     self.show_bar()
                     log_print(DEBUG, f"マウス検出: y={mouse_y}, 検出エリア: 0-{detection_area_height}")
             elif self._visible and not self._hide_timer.isActive():
-                # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始
-                self._hide_timer.start(1500)  # 1.5秒後に非表示
+                # 検出エリア外かつ非表示タイマーが動いていない場合は非表示タイマーを開始 - スレッドセーフに
+                if QThread.currentThread() == self.thread():
+                    self._hide_timer.start(1500)  # 1.5秒後に非表示
+                else:
+                    QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
         
         # イベントはそのまま親ウィジェットに渡す
         return super().eventFilter(watched, event)
     
     def enterEvent(self, event):
         """マウスがウィジェットに入った時の処理"""
-        # 自動非表示タイマーを停止
-        self._hide_timer.stop()
+        # 自動非表示タイマーを停止 - スレッドセーフに
+        if QThread.currentThread() == self.thread():
+            self._hide_timer.stop()
+        else:
+            QTimer.singleShot(0, self._hide_timer.stop)
         super().enterEvent(event)
     
     def leaveEvent(self, event):
         """マウスがウィジェットから出た時の処理"""
-        # 1.5秒後に非表示
-        self._hide_timer.start(1500)
+        # 1.5秒後に非表示 - スレッドセーフに
+        if QThread.currentThread() == self.thread():
+            self._hide_timer.start(1500)
+        else:
+            QTimer.singleShot(0, lambda: self._hide_timer.start(1500))
         super().leaveEvent(event)
     
     def stop_timers(self):
         """全てのタイマーを停止"""
         # 自動非表示タイマーを停止
         if self._hide_timer and self._hide_timer.isActive():
-            self._hide_timer.stop()
+            if QThread.currentThread() == self.thread():
+                self._hide_timer.disconnect()
+                self._hide_timer.stop()
+            else:
+                QTimer.singleShot(0, lambda: self._hide_timer.disconnect())
+                QTimer.singleShot(0, self._hide_timer.stop)
         
         # マウス位置チェックタイマーを停止
         if self._check_mouse_timer and self._check_mouse_timer.isActive():
-            self._check_mouse_timer.stop()
+            if QThread.currentThread() == self.thread():
+                self._check_mouse_timer.disconnect()
+                self._check_mouse_timer.stop()
+            else:
+                QTimer.singleShot(0, lambda: self._check_mouse_timer.disconnect())
+                QTimer.singleShot(0, self._check_mouse_timer.stop)
         
         log_print(DEBUG, "インフォメーションバーの全タイマーが停止されました")
+        
+    def closeEvent(self, event):
+        """ウィジェット終了時の処理"""
+        # タイマーをすべて停止
+        self.stop_timers()
+        super().closeEvent(event)
+        
+    def __del__(self):
+        """オブジェクト破棄時の処理"""
+        try:
+            self.stop_timers()
+            log_print(DEBUG, "インフォメーションバーのデストラクタが呼ばれました")
+        except:
+            pass

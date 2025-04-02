@@ -6,6 +6,7 @@
 
 import os
 import sys
+from time import sleep
 from typing import Optional, Dict, Any, List, Tuple
 
 # プロジェクトルートへのパスを追加
@@ -285,6 +286,10 @@ class ImagePreviewWindow(QMainWindow):
         # フルスクリーン切り替えシグナルを接続
         self.navigation_bar.toggle_fullscreen_requested.connect(self._on_toggle_fullscreen)
         
+        # イベントハンドラにナビゲーションバーのシグナル情報を登録
+        if hasattr(self, 'event_handler') and self.event_handler:
+            self.event_handler.register_navigation_bar_signals(self.navigation_bar)
+        
         # 親がQMainWindowであることが前提
         # 初期状態では非表示
         self.navigation_bar.hide()
@@ -387,15 +392,27 @@ class ImagePreviewWindow(QMainWindow):
                 self.information_bar.show_bar()
                 log_print(DEBUG, "ステータス更新でインフォメーションバーを表示")
     
-    def _update_images_from_browser(self):
-        """ブラウザから画像パスを取得して表示を更新"""
-        if not self._browser:
-            return
+    def _update_images_from_browser(self, index: int = None, force_reload: bool = False):
+        """
+        ブラウザで選択されたインデックスから画像を更新
         
-        # 更新中フラグをセット - イベント処理をブロック
+        Args:
+            index: 更新するインデックス（Noneの場合は現在のインデックスを使用）
+            force_reload: 強制再読み込みするかどうか
+        """
+        # デバッグ出力
+        log_print(INFO, f"画像更新開始: インデックス={index if index is not None else '現在位置'}, 強制再読み込み={force_reload}")
+        
+        # 画像更新中フラグを設定
         self._is_updating_images = True
         
         try:
+            # 更新中フラグが既にセットされているので再設定は不要
+            
+            if not self._browser:
+                log_print(WARNING, "ブラウザが初期化されていません")
+                return
+            
             # 現在の表示モード（ウィンドウ合わせか原寸大か）を保存
             fit_to_window_mode = self.image_model.is_fit_to_window()
             
@@ -457,8 +474,18 @@ class ImagePreviewWindow(QMainWindow):
             import traceback
             log_print(ERROR, traceback.format_exc())
         finally:
-            # 更新完了後、フラグをリセット - イベント処理のブロックを解除
+            # 更新完了後、フラグをリセット
             self._is_updating_images = False
+            
+            # イベントハンドラのロックを解除する確実な場所
+            if hasattr(self, 'event_handler') and self.event_handler:
+                log_print(INFO, "画像更新完了 - ナビゲーションロックを解除します")
+                # 少し待機して確実にフラグを反映してからロック解除
+                sleep(0.1)
+                self.event_handler.unlock_navigation_events()
+            
+            # デバッグ出力
+            log_print(INFO, "画像更新完了、キー操作を再開します")
     
     def load_image_from_path(self, path: str, index: int = 0, use_browser_path: bool = False) -> bool:
         """
@@ -697,7 +724,7 @@ class ImagePreviewWindow(QMainWindow):
         """マウス移動イベント処理"""
         # イベントハンドラに処理を委譲
         if not self.event_handler.handle_mouse_move(event, self.height()):
-            # 処理されなかった場合は親クラスに渡す
+            # 処理されなかった場合は親クラスに渡すt
             super().mouseMoveEvent(event)
     
     def contextMenuEvent(self, event: QContextMenuEvent):
@@ -732,6 +759,9 @@ class ImagePreviewWindow(QMainWindow):
     
     def _on_prev_image(self):
         """前の画像に移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.prev()
@@ -749,21 +779,39 @@ class ImagePreviewWindow(QMainWindow):
     
     def _on_next_image(self):
         """次の画像に移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.next()
                 self.statusbar.showMessage(f"次の画像に移動: {path}")
                 # 更新前に現在のパス情報をログ出力
                 log_print(DEBUG, f"次の画像への移動: {path}, 現在のブラウザ状態: pages={self._browser._pages}, shift={self._browser._shift}")
+                
+                # ナビゲーション中のロック状態をログ出力
+                if hasattr(self, 'event_handler'):
+                    locked = self.event_handler.is_navigation_locked()
+                    in_progress = self.event_handler._navigation_in_progress
+                    signals_connected = self.event_handler._navigation_signals_connected
+                    log_print(DEBUG, f"ナビゲーション状態: ロック中={locked}, 処理中={in_progress}, シグナル接続={signals_connected}")
+                
+                # 画像更新
                 self._update_images_from_browser()
                 return True
             except Exception as e:
                 log_print(ERROR, f"次の画像への移動に失敗しました: {e}")
                 self.statusbar.showMessage("次の画像への移動に失敗しました")
+                # エラー発生時も確実にロックを解除
+                if hasattr(self, 'event_handler'):
+                    self.event_handler.unlock_navigation_events()
         return False
     
     def _on_first_image(self):
         """最初の画像に移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.go_first()
@@ -777,6 +825,9 @@ class ImagePreviewWindow(QMainWindow):
     
     def _on_last_image(self):
         """最後の画像に移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.go_last()
@@ -790,6 +841,9 @@ class ImagePreviewWindow(QMainWindow):
     
     def _on_prev_folder(self):
         """前のフォルダに移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、フォルダ移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.prev_folder()
@@ -803,6 +857,9 @@ class ImagePreviewWindow(QMainWindow):
     
     def _on_next_folder(self):
         """次のフォルダに移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、フォルダ移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.next_folder()
@@ -816,6 +873,9 @@ class ImagePreviewWindow(QMainWindow):
 
     def _on_first_folder_image(self):
         """フォルダ内の先頭画像に移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.go_top()
@@ -829,6 +889,9 @@ class ImagePreviewWindow(QMainWindow):
 
     def _on_last_folder_image(self):
         """フォルダ内の最後の画像に移動"""
+        if self._is_updating_images:
+            log_print(DEBUG, "画像更新中のため、移動イベントをブロック")
+            return True
         if self._browser:
             try:
                 path = self._browser.go_end()
@@ -858,7 +921,7 @@ class ImagePreviewWindow(QMainWindow):
     def _adjust_bars(self):
         """ナビゲーションバーとインフォメーションバーのサイズと位置を調整"""
         # ナビゲーションバーの調整
-        self._adjust_navigation_size()
+        self._adjust_navigation_size(self.width())
         
         # インフォメーションバーの調整
         if hasattr(self, 'information_bar'):
