@@ -101,15 +101,20 @@ def set_archive_path(path: str) -> bool:
     """
     global current_archive_path, all_entries
     
-    # パスを正規化（先頭の/は物理パスとして保持する）
-    path = normalize_path(path)
+    # パスを正規化 (ネットワークパスの先頭の \\ を // として保持する)
+    if path.startswith('\\\\'):
+        # ネットワークパスの場合、先頭の \\ を // に変換してから正規化
+        normalized_path = '//' + normalize_path(path[2:])
+    else:
+        # 通常のパス正規化
+        normalized_path = normalize_path(path)
     
-    if not os.path.exists(path):
-        log_print(ERROR, f"エラー: ファイルが見つかりません: {path}")
+    if not os.path.exists(normalized_path):
+        log_print(ERROR, f"エラー: ファイルが見つかりません: {normalized_path}")
         return False
         
-    if not os.path.isfile(path) and not os.path.isdir(path):
-        log_print(ERROR, f"エラー: 指定されたパスはファイルまたはディレクトリではありません: {path}")
+    if not os.path.isfile(normalized_path) and not os.path.isdir(normalized_path):
+        log_print(ERROR, f"エラー: 指定されたパスはファイルまたはディレクトリではありません: {normalized_path}")
         return False
         
     try:
@@ -117,24 +122,24 @@ def set_archive_path(path: str) -> bool:
         all_entries = {}
         
         # アーカイブファイルパスを設定
-        current_archive_path = path
-        log_print(INFO, f"アーカイブを設定: {path}")
+        current_archive_path = normalized_path
+        log_print(INFO, f"アーカイブを設定: {normalized_path}")
         
-        if os.path.isfile(path):
-            log_print(INFO, f"ファイルサイズ: {os.path.getsize(path):,} バイト")
+        if os.path.isfile(normalized_path):
+            log_print(INFO, f"ファイルサイズ: {os.path.getsize(normalized_path):,} バイト")
         
         # マネージャーにカレントパスを設定
-        manager.set_current_path(path)
+        manager.set_current_path(normalized_path)
         all_entries = manager.get_entry_cache()
         log_print(INFO, f"エントリ数: {len(all_entries.keys())}/{len(all_entries.values())}")
         # マネージャーがこのファイルを処理できるか確認
-        handler_info = manager.get_handler(path)
+        handler_info = manager.get_handler(normalized_path)
         if handler_info:
             handler_name = handler_info.__class__.__name__
             log_print(INFO, f"このファイルは '{handler_name}' で処理可能です")          
             return True
         else:
-            log_print(ERROR, f"エラー: アーカイブマネージャーはこのファイルを処理できません: {path}")
+            log_print(ERROR, f"エラー: アーカイブマネージャーはこのファイルを処理できません: {normalized_path}")
             return False
     except Exception as e:
         log_print(ERROR, f"エラー: アーカイブの設定に失敗しました: {e}")

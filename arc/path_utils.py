@@ -21,13 +21,24 @@ def normalize_path(path: str) -> str:
     """
     if path is None:
         return ""
-        
+    
+    # ネットワークパスかどうかをチェック
+    is_network_path = path.startswith('\\\\') or path.startswith('//')
+    
     # バックスラッシュをスラッシュに変換
     normalized = path.replace('\\', '/')
     
-    # 連続するスラッシュを1つに
+    # 連続するスラッシュを1つに（ただし先頭の // はネットワークパスなので保持）
     while '//' in normalized:
-        normalized = normalized.replace('//', '/')
+        if is_network_path and normalized.startswith('//'):
+            # ネットワークパスの先頭 // を保持して残りの部分を処理
+            rest = normalized[2:]
+            while '//' in rest:
+                rest = rest.replace('//', '/')
+            normalized = '//' + rest
+            break
+        else:
+            normalized = normalized.replace('//', '/')
     
     # WindowsドライブレターのUNIX形式表現を修正（例: /C:/path → C:/path）
     if len(normalized) > 2 and normalized[0] == '/' and normalized[2] == ':':
